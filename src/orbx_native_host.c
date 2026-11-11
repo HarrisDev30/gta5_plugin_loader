@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "orbx_native_host.h"
+#include "modhen_config.h"
 #include "pad_hook.h"
 #include "pt.h"
 #include "log.h"
@@ -775,6 +776,335 @@ static void run_rage_v100_probe(pid_t pid, uint64_t eboot_base, uint64_t eboot_s
     dump_code_hex(pid, eboot_base + 0x1aae7f0ULL, 128, "scrThread_1eae7f0");
 }
 
+/* ============================================================================
+ * Safe Diagnostic Probe & Adjuster for RAGE sysMemAllocator (Heap Adjuster)
+ * ============================================================================ */
+
+static void dump_heap_code_hex(pid_t pid, uint64_t va, size_t bytes, const char *label) {
+    if (bytes > 128) bytes = 128;
+    uint8_t buf[128];
+    if (kernel_proc_copyout(pid, (intptr_t)va, buf, bytes) != 0) {
+        log_msg("[HEAP-WARN] Failed reading 0x%llx for dump '%s'\n", (unsigned long long)va, label);
+        return;
+    }
+    char hex[257];
+    for (size_t i = 0; i < bytes; i++) {
+        static const char kHex[] = "0123456789abcdef";
+        hex[i * 2]     = kHex[buf[i] >> 4];
+        hex[i * 2 + 1] = kHex[buf[i] & 0xf];
+    }
+    hex[bytes * 2] = '\0';
+    log_msg("[HEAP-PROBE] Dump '%s' @ 0x%llx (%zuB): %s\n",
+            label, (unsigned long long)va, bytes, hex);
+}
+
+typedef struct {
+    uint32_t size_val;
+    uint32_t size_mb;
+    const char *desc;
+} HeapSizeTarget;
+
+static const HeapSizeTarget kHeapTargets[] = {
+    { 0x18000000u,  384, "384 MB (Compact)" },
+    { 0x19000000u,  400, "400 MB (Default 400M)" },
+    { 0x19C00000u,  412, "412 MB (CitizenFX / Build 323 Default)" },
+    { 0x1A000000u,  416, "416 MB (416M)" },
+    { 0x1C200000u,  450, "450 MB (450M)" },
+    { 0x1F400000u,  500, "500 MB (Default 500M)" },
+    { 0x20000000u,  512, "512 MB (512M)" },
+    { 0x25800000u,  600, "600 MB (Standard RAGE 600M)" },
+    { 0x28A00000u,  650, "650 MB (PC Update 650M)" },
+    { 0x2BC00000u,  700, "700 MB" },
+    { 0x30000000u,  768, "768 MB" },
+    { 0x32000000u,  800, "800 MB" },
+    { 0x38400000u,  900, "900 MB" },
+};
+#define NUM_HEAP_TARGETS (sizeof(kHeapTargets) / sizeof(kHeapTargets[0]))
+
+typedef struct {
+    uint64_t insn_va;
+    uint64_t imm_va;
+    uint32_t orig_size;
+    uint32_t orig_mb;
+    uint8_t  reg_opcode;
+    char     opcode_desc[32];
+    uint64_t target_call;
+    int      has_call;
+} HeapCandidate;
+
+#define MAX_HEAP_CANDIDATES 32
+
+static void probe_rage_heap_allocator(pid_t pid, uint64_t eboot_base, uint64_t eboot_size,
+                                      int target_heap_mb, int enable_patch) {
+    if (!pid || !eboot_base || eboot_size < 0x100000ULL) {
+        log_msg("[HEAP-ABORT] Invalid bounds: pid=%d, base=0x%llx, size=0x%llx\n",
+                pid, (unsigned long long)eboot_base, (unsigned long long)eboot_size);
+        return;
+    }
+
+    uint64_t t0 = now_mono_ms();
+    log_msg("[HEAP-PROBE] ====================================================\n");
+    log_msg("[HEAP-PROBE] RAGE Heap Diagnostics & Safety Probe (PS5 Host)\n");
+    log_msg("[HEAP-PROBE] Target PID %d | Base 0x%llx | Size 0x%llx\n",
+            pid, (unsigned long long)eboot_base, (unsigned long long)eboot_size);
+    log_msg("[HEAP-PROBE] Mode: %s | Target Heap: %d MB\n",
+            enable_patch ? "ACTIVE PATCH (Guarded)" : "READ-ONLY PROBE",
+            target_heap_mb > 0 ? target_heap_mb : 1024);
+    log_msg("[HEAP-PROBE] ====================================================\n");
+
+    /* Scan up to 0x2800000 (40 MB) which encompasses .text and .rodata of GTA V */
+    uint64_t scan_end = eboot_base + 0x2800000ULL;
+    if (scan_end > eboot_base + eboot_size) scan_end = eboot_base + eboot_size;
+    uint64_t text_end = eboot_base + 0x27ac000ULL;
+    if (text_end > scan_end) text_end = scan_end;
+
+    size_t chunk_size = 0x10000; /* 64 KB chunk */
+    uint8_t *chunk = (uint8_t *)malloc(chunk_size + 64);
+    if (!chunk) {
+        log_msg("[HEAP-ABORT] Memory allocation failed for probe buffer!\n");
+        return;
+    }
+
+    /* -------------------------------------------------------------
+     * PASS 1: Search for ASCII string "sysMemAllocator"
+     * ------------------------------------------------------------- */
+    uint64_t str_va = 0;
+    static const char kStrNeedle[] = "sysMemAllocator";
+    const size_t needle_len = sizeof(kStrNeedle) - 1;
+
+    for (uint64_t cur = eboot_base; cur < scan_end; cur += (chunk_size - 64)) {
+        size_t to_read = (cur + chunk_size <= scan_end) ? chunk_size : (size_t)(scan_end - cur);
+        if (to_read < needle_len) break;
+        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
+
+        for (size_t i = 0; i + needle_len <= to_read; i++) {
+            if (chunk[i] == 's' && memcmp(chunk + i, kStrNeedle, needle_len) == 0) {
+                str_va = cur + i;
+                log_msg("[HEAP-PROBE] Found string '%s' @ 0x%llx (offset +0x%llx)\n",
+                        kStrNeedle, (unsigned long long)str_va, (unsigned long long)(str_va - eboot_base));
+                break;
+            }
+        }
+        if (str_va) break;
+    }
+
+    /* If string found, probe for RIP-relative code references to it and static data pointers */
+    if (str_va) {
+        probe_data_ptr_refs(pid, eboot_base, eboot_base + eboot_size, str_va, "sysMemAllocator_PTR", 4);
+
+        int xrefs_found = 0;
+        for (uint64_t cur = eboot_base; cur < text_end && xrefs_found < 4; cur += (chunk_size - 64)) {
+            size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
+            if (to_read < 8) break;
+            if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
+
+            for (size_t i = 0; i + 7 <= to_read && xrefs_found < 4; i++) {
+                if ((chunk[i] == 0x48 || chunk[i] == 0x4c) &&
+                    (chunk[i + 1] == 0x8d || chunk[i + 1] == 0x8b) &&
+                    (chunk[i + 2] & 0xc7) == 0x05) {
+                    int32_t disp = 0;
+                    memcpy(&disp, chunk + i + 3, 4);
+                    uint64_t insn_va = cur + i;
+                    uint64_t ref_va = (uint64_t)((int64_t)(insn_va + 7) + (int64_t)disp);
+                    if (ref_va == str_va) {
+                        log_msg("[HEAP-PROBE] String XREF #%d @ 0x%llx (+0x%llx)\n",
+                                ++xrefs_found, (unsigned long long)insn_va, (unsigned long long)(insn_va - eboot_base));
+                        dump_heap_code_hex(pid, (insn_va > 16) ? (insn_va - 16) : insn_va, 48, "sysMemAllocator_XREF");
+                    }
+                }
+            }
+        }
+    }
+
+    /* -------------------------------------------------------------
+     * PASS 1.5: CitizenFX Heap Adjuster Signature Scan
+     * "83 C8 01" (or eax, 1) followed by memory allocation setup
+     * ------------------------------------------------------------- */
+    int cfx_hits = 0;
+    for (uint64_t cur = eboot_base; cur < text_end && cfx_hits < 4; cur += (chunk_size - 64)) {
+        size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
+        if (to_read < 24) break;
+        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
+
+        for (size_t i = 0; i + 24 <= to_read && cfx_hits < 4; i++) {
+            if (chunk[i] == 0x83 && chunk[i + 1] == 0xc8 && chunk[i + 2] == 0x01) {
+                /* Check if lea rcx/rdi or call rel32 appears within 24 bytes */
+                int has_setup = 0;
+                for (size_t j = i + 3; j + 5 <= i + 24; j++) {
+                    if (chunk[j] == 0x48 && chunk[j + 1] == 0x8d && (chunk[j + 2] & 0xc7) == 0x05) has_setup = 1;
+                    if (chunk[j] == 0xe8) has_setup = 1;
+                }
+                if (has_setup) {
+                    uint64_t site = cur + i;
+                    log_msg("[HEAP-PROBE] CitizenFX candidate #%d @ 0x%llx (+0x%llx)\n",
+                            ++cfx_hits, (unsigned long long)site, (unsigned long long)(site - eboot_base));
+                    dump_heap_code_hex(pid, site, 48, "CitizenFX_Candidate");
+                }
+            }
+        }
+    }
+
+    /* -------------------------------------------------------------
+     * PASS 2: Search for 32-bit Heap Size Immediate Loads
+     * ------------------------------------------------------------- */
+    HeapCandidate candidates[MAX_HEAP_CANDIDATES];
+    int candidate_count = 0;
+    memset(candidates, 0, sizeof(candidates));
+
+    for (uint64_t cur = eboot_base; cur < text_end && candidate_count < MAX_HEAP_CANDIDATES; cur += (chunk_size - 64)) {
+        size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
+        if (to_read < 16) break;
+        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
+
+        for (size_t i = 4; i + 8 <= to_read && candidate_count < MAX_HEAP_CANDIDATES; i++) {
+            uint32_t val = 0;
+            memcpy(&val, chunk + i, 4);
+
+            for (size_t k = 0; k < NUM_HEAP_TARGETS; k++) {
+                if (val != kHeapTargets[k].size_val) continue;
+
+                uint64_t insn_va = 0;
+                uint64_t imm_va  = cur + i;
+                const char *op_desc = NULL;
+                uint8_t op_byte = chunk[i - 1];
+
+                if (op_byte == 0xbe) {
+                    insn_va = cur + i - 1;
+                    op_desc = "mov esi, imm32 (arg2)";
+                } else if (op_byte == 0xbf) {
+                    insn_va = cur + i - 1;
+                    op_desc = "mov edi, imm32 (arg1)";
+                } else if (op_byte == 0xba) {
+                    insn_va = cur + i - 1;
+                    op_desc = "mov edx, imm32 (arg3)";
+                } else if (op_byte == 0xb9) {
+                    insn_va = cur + i - 1;
+                    op_desc = "mov ecx, imm32 (arg4)";
+                } else if (op_byte == 0xb8) {
+                    insn_va = cur + i - 1;
+                    op_desc = "mov eax, imm32";
+                } else if (i >= 2 && chunk[i - 2] == 0x41 && op_byte == 0xb8) {
+                    insn_va = cur + i - 2;
+                    op_desc = "mov r8d, imm32 (arg5)";
+                } else if (i >= 3 && chunk[i - 3] == 0xc7 && chunk[i - 2] == 0x44 && chunk[i - 1] == 0x24) {
+                    insn_va = cur + i - 4;
+                    op_desc = "mov [rsp+disp], imm32";
+                } else if (i >= 2 && chunk[i - 2] == 0xc7 && (chunk[i - 1] & 0xc0) == 0x40) {
+                    insn_va = cur + i - 3;
+                    op_desc = "mov [reg+disp], imm32";
+                }
+
+                if (!insn_va) continue;
+
+                int has_call = 0;
+                uint64_t target_call = 0;
+                size_t lookahead_limit = (i + 4 + 32 <= to_read) ? (i + 4 + 32) : to_read;
+                for (size_t c = i + 4; c + 5 <= lookahead_limit; c++) {
+                    if (chunk[c] == 0xe8) {
+                        int32_t rel = 0;
+                        memcpy(&rel, chunk + c + 1, 4);
+                        target_call = (uint64_t)((int64_t)(cur + c + 5) + (int64_t)rel);
+                        has_call = 1;
+                        break;
+                    }
+                }
+
+                HeapCandidate *cand = &candidates[candidate_count++];
+                cand->insn_va     = insn_va;
+                cand->imm_va      = imm_va;
+                cand->orig_size   = val;
+                cand->orig_mb     = kHeapTargets[k].size_mb;
+                cand->reg_opcode  = op_byte;
+                snprintf(cand->opcode_desc, sizeof(cand->opcode_desc), "%s", op_desc);
+                cand->target_call = target_call;
+                cand->has_call    = has_call;
+
+                log_msg("[HEAP-PROBE] Candidate #%d @ 0x%llx (+0x%llx) | %s | Size: 0x%08x (%u MB) [%s]%s",
+                        candidate_count, (unsigned long long)insn_va, (unsigned long long)(insn_va - eboot_base),
+                        op_desc, val, kHeapTargets[k].size_mb, kHeapTargets[k].desc,
+                        has_call ? " | Call: " : "\n");
+                if (has_call) {
+                    log_msg("0x%llx (+0x%llx)\n",
+                            (unsigned long long)target_call, (unsigned long long)(target_call - eboot_base));
+                }
+
+                dump_heap_code_hex(pid, (insn_va > 8) ? (insn_va - 8) : insn_va, 40, "Heap_Candidate");
+                break;
+            }
+        }
+    }
+
+    free(chunk);
+
+    uint64_t elapsed = now_mono_ms() - t0;
+    log_msg("[HEAP-PROBE] Scan completed in %llums. Total candidates identified: %d\n",
+            (unsigned long long)elapsed, candidate_count);
+
+    /* -------------------------------------------------------------
+     * PASS 3: Safe Conditional Patch (Only if explicitly armed)
+     * ------------------------------------------------------------- */
+    if (!enable_patch) {
+        log_msg("[HEAP-PROBE] Safe Mode: Read-Only Probe active. Zero memory modified.\n");
+        return;
+    }
+
+    if (candidate_count == 0) {
+        log_msg("[HEAP-WARN] No candidate heap allocators found to patch.\n");
+        return;
+    }
+
+    if (target_heap_mb < 500 || target_heap_mb > 3000) {
+        log_msg("[HEAP-ABORT] Configured target heap (%d MB) out of safe range (500..3000 MB)! Aborting patch.\n",
+                target_heap_mb);
+        return;
+    }
+
+    HeapCandidate *best = NULL;
+    int call_candidates = 0;
+    for (int i = 0; i < candidate_count; i++) {
+        if (candidates[i].has_call) {
+            best = &candidates[i];
+            call_candidates++;
+        }
+    }
+
+    if (call_candidates != 1) {
+        log_msg("[HEAP-WARN] Ambiguous candidates (call_count=%d). For PS5 safety, manual offset verification required before write.\n",
+                call_candidates);
+        return;
+    }
+
+    uint32_t current_val = 0;
+    if (kernel_proc_copyout(pid, (intptr_t)best->imm_va, &current_val, sizeof(current_val)) != 0) {
+        log_msg("[HEAP-ABORT] Failed reading imm_va 0x%llx before write!\n", (unsigned long long)best->imm_va);
+        return;
+    }
+
+    if (current_val != best->orig_size) {
+        log_msg("[HEAP-ABORT] Memory mismatch at 0x%llx! Expected 0x%08x, read 0x%08x. Aborting write.\n",
+                (unsigned long long)best->imm_va, best->orig_size, current_val);
+        return;
+    }
+
+    uint32_t new_size = (uint32_t)target_heap_mb * 1024u * 1024u;
+    log_msg("[HEAP-PATCH] Arming patch @ 0x%llx: 0x%08x (%u MB) -> 0x%08x (%d MB)\n",
+            (unsigned long long)best->imm_va, current_val, best->orig_mb, new_size, target_heap_mb);
+
+    int wr = pt_copyin(pid, &new_size, (intptr_t)best->imm_va, sizeof(new_size));
+    uint32_t verify = 0;
+    kernel_proc_copyout(pid, (intptr_t)best->imm_va, &verify, sizeof(verify));
+
+    if (verify == new_size) {
+        log_msg("[HEAP-PATCH] SUCCESS: RAGE heap expanded to %d MB! (write_rc=%d, verified=0x%08x)\n",
+                target_heap_mb, wr, verify);
+        char toast[128];
+        snprintf(toast, sizeof(toast), "GTA V RAGE Heap Expanded: %d MB", target_heap_mb);
+        notify(toast);
+    } else {
+        log_msg("[HEAP-ABORT] Patch verification failed! write_rc=%d, read_back=0x%08x\n", wr, verify);
+    }
+}
+
 static int is_non_car_dlc(const char *name) {
     if (!name || !*name) return 1;
     if (strcasecmp(name, "NVE") == 0 ||
@@ -1262,13 +1592,20 @@ int install_orbx_native(pid_t pid) {
     try_patch_v100_flip_interval(pid, eboot_base, unlock_60fps_cfg);
     try_patch_v100_pso_strs(pid, eboot_base, remote_code + ORBX_ENTRY_OFF_PSO_STRS);
 
+    /* 6. Safe RAGE Heap Allocator Probe & Diagnostic Adjuster */
+    ModhenConfig mcfg;
+    modhen_config_load(&mcfg);
+    if (mcfg.heap_probe) {
+        probe_rage_heap_allocator(pid, eboot_base, eboot_size, mcfg.heap_size_mb, mcfg.heap_adjuster);
+    }
+
     pt_detach(pid, 0);
 
     log_msg("[ORBX-NATIVE] Native Engine ACTIVE! Code=0x%llx (%zu B), Ctx=0x%llx, Hooks=%d, Mods=%u\n",
             (unsigned long long)remote_code, bin_size,
             (unsigned long long)remote_ctx, armed_count, g_cached_mods);
 
-    /* 6. Read-only DMAP probe for RAGE v1.00 addresses (Phase 2 diagnostics) */
+    /* 7. Read-only DMAP probe for RAGE v1.00 addresses (Phase 2 diagnostics) */
     run_rage_v100_probe(pid, eboot_base, eboot_size);
 
     return (armed_count > 0) ? 0 : -1;

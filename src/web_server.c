@@ -246,10 +246,14 @@ static void handle_api_config_get(int client_fd) {
     modhen_config_load(&cfg);
     char resp[512];
     int len = snprintf(resp, sizeof(resp),
-        "{\"native_orbx\":%s,\"legacy_prx\":%s,\"legacy_prx_name\":\"%s\"}",
+        "{\"native_orbx\":%s,\"legacy_prx\":%s,\"legacy_prx_name\":\"%s\","
+        "\"heap_probe\":%s,\"heap_adjuster\":%s,\"heap_size_mb\":%d}",
         cfg.native_orbx ? "true" : "false",
         cfg.legacy_prx ? "true" : "false",
-        cfg.legacy_prx_name);
+        cfg.legacy_prx_name,
+        cfg.heap_probe ? "true" : "false",
+        cfg.heap_adjuster ? "true" : "false",
+        cfg.heap_size_mb);
     send_http_response(client_fd, 200, "OK", "application/json", resp, len);
 }
 
@@ -275,12 +279,31 @@ static void handle_api_config_post(int client_fd, const char *url) {
         snprintf(cfg.legacy_prx_name, sizeof(cfg.legacy_prx_name), "%s", val);
     }
 
+    val[0] = '\0';
+    get_query_param(url, "heap_probe", val, sizeof(val));
+    if (val[0] != '\0') {
+        cfg.heap_probe = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0) ? 1 : 0;
+    }
+
+    val[0] = '\0';
+    get_query_param(url, "heap_adjuster", val, sizeof(val));
+    if (val[0] != '\0') {
+        cfg.heap_adjuster = (strcmp(val, "1") == 0 || strcasecmp(val, "true") == 0) ? 1 : 0;
+    }
+
+    val[0] = '\0';
+    get_query_param(url, "heap_size_mb", val, sizeof(val));
+    if (val[0] != '\0') {
+        int mb = atoi(val);
+        if (mb > 0) cfg.heap_size_mb = mb;
+    }
+
     if (modhen_config_save(&cfg) != 0) {
         send_http_response(client_fd, 500, "Error", "text/plain", "Failed saving config.ini", 23);
         return;
     }
-    log_msg("[WEB] Updated Engine Config: native_orbx=%d, legacy_prx=%d, legacy_prx_name='%s'\n",
-            cfg.native_orbx, cfg.legacy_prx, cfg.legacy_prx_name);
+    log_msg("[WEB] Updated Engine Config: native_orbx=%d, legacy_prx=%d, heap_probe=%d, heap_adjuster=%d, heap_size_mb=%d\n",
+            cfg.native_orbx, cfg.legacy_prx, cfg.heap_probe, cfg.heap_adjuster, cfg.heap_size_mb);
     handle_api_config_get(client_fd);
 }
 

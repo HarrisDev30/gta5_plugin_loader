@@ -309,8 +309,8 @@ void handle_game_launch(pid_t pid, const char *title_id) {
 
     ModhenConfig cfg;
     modhen_config_load(&cfg);
-    log_msg("[modHEN] Active Config: native_orbx=%d, legacy_prx=%d, legacy_prx_name='%s'\n",
-            cfg.native_orbx, cfg.legacy_prx, cfg.legacy_prx_name);
+    log_msg("[modHEN] Active Config: native_orbx=%d, legacy_prx=%d, heap_probe=%d, heap_adjuster=%d, heap_size_mb=%d, legacy_prx_name='%s'\n",
+            cfg.native_orbx, cfg.legacy_prx, cfg.heap_probe, cfg.heap_adjuster, cfg.heap_size_mb, cfg.legacy_prx_name);
 
     // Poll every 150ms until eboot GOT / libkernel imports are ready so we hook BEFORE update.rpf loads
     log_msg("[modHEN] Waiting for eboot.bin dynamic linker...\n");

@@ -20,9 +20,12 @@ static void cfg_trim(char *s) {
 void modhen_config_defaults(ModhenConfig *cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
-    cfg->native_orbx = 1;
-    cfg->legacy_prx  = 0;
+    cfg->native_orbx   = 1;
+    cfg->legacy_prx    = 0;
     cfg->legacy_prx_name[0] = '\0';
+    cfg->heap_probe    = 1;
+    cfg->heap_adjuster = 0; /* Default: 100% Read-Only Safety Probe */
+    cfg->heap_size_mb  = 1024;
 }
 
 int modhen_config_load(ModhenConfig *cfg) {
@@ -53,6 +56,13 @@ int modhen_config_load(ModhenConfig *cfg) {
             cfg->legacy_prx = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) ? 1 : 0;
         } else if (strcasecmp(key, "legacy_prx_name") == 0) {
             snprintf(cfg->legacy_prx_name, sizeof(cfg->legacy_prx_name), "%s", val);
+        } else if (strcasecmp(key, "heap_probe") == 0) {
+            cfg->heap_probe = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) ? 1 : 0;
+        } else if (strcasecmp(key, "heap_adjuster") == 0) {
+            cfg->heap_adjuster = (strcasecmp(val, "true") == 0 || strcmp(val, "1") == 0) ? 1 : 0;
+        } else if (strcasecmp(key, "heap_size_mb") == 0) {
+            int mb = atoi(val);
+            if (mb > 0) cfg->heap_size_mb = mb;
         }
     }
     fclose(f);
@@ -70,6 +80,10 @@ int modhen_config_save(const ModhenConfig *cfg) {
     fprintf(f, "native_orbx=%d\n", cfg->native_orbx ? 1 : 0);
     fprintf(f, "legacy_prx=%d\n", cfg->legacy_prx ? 1 : 0);
     fprintf(f, "legacy_prx_name=%s\n", cfg->legacy_prx_name);
+    fprintf(f, "\n[HEAP]\n");
+    fprintf(f, "heap_probe=%d\n", cfg->heap_probe ? 1 : 0);
+    fprintf(f, "heap_adjuster=%d\n", cfg->heap_adjuster ? 1 : 0);
+    fprintf(f, "heap_size_mb=%d\n", cfg->heap_size_mb > 0 ? cfg->heap_size_mb : 1024);
     fclose(f);
     chmod(MODHEN_CONFIG_PATH, 0777);
     return 0;
