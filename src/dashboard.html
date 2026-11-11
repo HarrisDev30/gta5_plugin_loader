@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>modHEN: PS5 GTA V Mod & Plugin Manager</title>
+<style>
+  :root {
+    --bg-main: #0a0d14;
+    --bg-sidebar: #10141d;
+    --bg-card: #151a24;
+    --bg-card-hover: #1c2230;
+    --bg-input: #0d1118;
+    --border: #232a3b;
+    --border-hover: #37425c;
+    --text-main: #f0f3f8;
+    --text-muted: #848f9f;
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-glow: rgba(99, 102, 241, 0.25);
+    --accent: #10b981;
+    --danger: #f43f5e;
+    --warning: #f59e0b;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body { background: var(--bg-main); color: var(--text-main); font-size: 13.5px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; }
+  
+  /* Topbar */
+  .topbar { background: var(--bg-sidebar); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 10; flex-shrink: 0; }
+  .logo-group { display: flex; align-items: center; gap: 12px; }
+  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #6366f1, #a855f7); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 4px 12px var(--primary-glow); }
+  .logo-title { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; color: #fff; }
+  .logo-subtitle { font-size: 11px; color: var(--text-muted); }
+  .status-pill { display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; color: var(--accent); }
+  .pulse-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent); }
+
+  /* App Layout */
+  .app-layout { display: flex; flex: 1; overflow: hidden; }
+  
+  /* Sidebar */
+  .sidebar { width: 230px; background: var(--bg-sidebar); border-right: 1px solid var(--border); padding: 16px 12px; display: flex; flex-direction: column; gap: 20px; flex-shrink: 0; overflow-y: auto; }
+  .sidebar-section-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; padding: 0 8px 6px; }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-md); color: var(--text-muted); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+  .nav-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text-main); }
+  .nav-item.active { background: var(--primary-glow); color: #fff; font-weight: 600; }
+  .nav-item-icon { font-size: 15px; width: 18px; text-align: center; }
+
+  /* Main Workspace */
+  .main-workspace { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-main); }
+  .workspace-header { padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg-sidebar); display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; }
+  .breadcrumbs { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-muted); }
+  .crumb { color: var(--text-muted); cursor: pointer; padding: 3px 6px; border-radius: 4px; transition: all 0.1s; }
+  .crumb:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
+  .crumb.current { color: #fff; font-weight: 600; cursor: default; }
+
+  /* Toolbar */
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+  .search-box { position: relative; width: 220px; }
+  .search-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border); padding: 7px 12px 7px 30px; border-radius: var(--radius-md); color: #fff; font-size: 12.5px; outline: none; transition: border-color 0.15s; }
+  .search-input:focus { border-color: var(--primary); }
+  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-muted); }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 14px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; outline: none; white-space: nowrap; }
+  .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 2px 8px var(--primary-glow); }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-secondary { background: var(--bg-card); border-color: var(--border); color: var(--text-main); }
+  .btn-secondary:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
+  .btn-danger { background: rgba(244, 63, 94, 0.1); border-color: rgba(244, 63, 94, 0.25); color: var(--danger); }
+  .btn-danger:hover { background: var(--danger); color: #fff; }
+  .btn-sm { padding: 4px 9px; font-size: 11.5px; border-radius: var(--radius-sm); }
+
+  /* Content Scroll Area */
+  .content-area { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+
+  /* Dropzone */
+  .drop-card { border: 2px dashed var(--border); background: var(--bg-card); border-radius: var(--radius-lg); padding: 26px 20px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; }
+  .drop-card:hover, .drop-card.dragover { border-color: var(--primary); background: rgba(99, 102, 241, 0.05); }
+  .drop-icon { font-size: 28px; margin-bottom: 8px; }
+  .drop-title { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+  .drop-desc { font-size: 12px; color: var(--text-muted); }
+  
+  /* Upload Progress */
+  .upload-progress { margin-top: 14px; display: none; }
+  .progress-bar-bg { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: width 0.1s ease; }
+  .progress-status { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+
+  /* File Table */
+  .file-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+  .table { width: 100%; border-collapse: collapse; text-align: left; }
+  .table th { background: rgba(0, 0, 0, 0.15); padding: 11px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+  .table td { padding: 12px 16px; border-bottom: 1px solid rgba(35, 42, 59, 0.5); font-size: 13px; }
+  .table tr:last-child td { border-bottom: none; }
+  .table tr:hover td { background: var(--bg-card-hover); }
+  .file-row-main { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+  .file-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; font-family: monospace; }
+  .badge-folder { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+  .badge-rpf { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
+  .badge-prx { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
+  .badge-meta { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+  .badge-file { background: rgba(139, 148, 158, 0.15); color: #9ca3af; }
+  .file-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+
+  /* Modals */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px); z-index: 999; align-items: center; justify-content: center; }
+  .modal-overlay.active { display: flex; }
+  .modal-box { background: var(--bg-card); border: 1px solid var(--border); width: 92%; max-width: 520px; border-radius: var(--radius-lg); box-shadow: 0 20px 40px rgba(0,0,0,0.5); overflow: hidden; animation: popIn 0.15s ease-out; }
+  .modal-box-lg { max-width: 780px; }
+  @keyframes popIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
+  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-sidebar); display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+  .input-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block; }
+  .modal-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border); padding: 9px 12px; border-radius: var(--radius-md); color: #fff; font-size: 13px; outline: none; }
+  .modal-input:focus { border-color: var(--primary); }
+  .code-textarea { width: 100%; height: 380px; background: #080a0f; border: 1px solid var(--border); color: #e6edf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 12px; border-radius: var(--radius-md); resize: vertical; outline: none; line-height: 1.5; }
+
+  /* In-App Toasts */
+  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  .toast { pointer-events: auto; background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--primary); padding: 12px 18px; border-radius: var(--radius-md); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: flex; align-items: center; gap: 10px; animation: slideIn 0.2s ease-out; }
+  .toast-success { border-left-color: var(--accent); }
+  .toast-error { border-left-color: var(--danger); }
+  @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+</style>
+</head>
+<body>
+
+<!-- Topbar -->
+<header class="topbar">
+  <div class="logo-group">
+    <div class="logo-icon">🎮</div>
+    <div>
+      <div class="logo-title">modHEN: PS5 GTA V Mod & Plugin Manager</div>
+      <div class="logo-subtitle">Native SPRX/PRX Loader & AFR Engine</div>
+    </div>
+  </div>
+  <div style="display: flex; gap: 12px; align-items: center;">
+    <button class="btn btn-secondary btn-sm" style="border-color: #3b82f6; color: #60a5fa; font-weight: 600; padding: 6px 14px;" onclick="openLogModal()">
+      <span>📋</span> Live Session Logs
+    </button>
+    <div class="status-pill" id="gameStatusPill">
+      <span class="pulse-dot"></span>
+      <span id="gameStatusText">PS5 Native Loader (Port 8050)</span>
+    </div>
+  </div>
+</header>
+
+<!-- Main App Layout -->
+<div class="app-layout">
+  
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div>
+      <div class="sidebar-section-title">Plugins & Engine</div>
+      <div class="nav-item active" id="navPlugins" onclick="navigateTo('/data/modHEN/plugins')">
+        <span class="nav-item-icon">🧩</span>
+        <span>Plugins (HyperHEN)</span>
+      </div>
+      <div class="nav-item" id="navPluginsFallback" onclick="navigateTo('/data/plugins')">
+        <span class="nav-item-icon">🔌</span>
+        <span>Plugins (Fallback)</span>
+      </div>
+
+      <div class="sidebar-section-title" style="margin-top: 14px;">GTA V Mod Folders (AFR)</div>
+      <div class="nav-item" id="navRoot" onclick="navigateTo('/data/orbx/gta')">
+        <span class="nav-item-icon">📂</span>
+        <span>GTA Mod Root</span>
+      </div>
+      <div class="nav-item" id="navData" onclick="navigateTo('/data/orbx/gta/data')">
+        <span class="nav-item-icon">🎨</span>
+        <span>Data Overrides (ReVansV)</span>
+      </div>
+      <div class="nav-item" id="navDlc" onclick="navigateTo('/data/orbx/gta/rpf/dlc_addon')">
+        <span class="nav-item-icon">🏎️</span>
+        <span>DLC Add-on Packs</span>
+      </div>
+      <div class="nav-item" id="navRpf" onclick="navigateTo('/data/orbx/gta/rpf')">
+        <span class="nav-item-icon">📦</span>
+        <span>RPF Archives</span>
+      </div>
+      <div class="nav-item" id="navOrbxCfg" onclick="navigateTo('/data/orbx')">
+        <span class="nav-item-icon">🛠️</span>
+        <span>Orbx INI Config</span>
+      </div>
+
+      <div class="sidebar-section-title" style="margin-top: 14px;">PS5 Filesystem Explorer</div>
+      <div class="nav-item" id="navFsRoot" onclick="navigateTo('/')">
+        <span class="nav-item-icon">💽</span>
+        <span>Root Directory (/)</span>
+      </div>
+      <div class="nav-item" id="navDataRoot" onclick="navigateTo('/data')">
+        <span class="nav-item-icon">📁</span>
+        <span>/data (Storage)</span>
+      </div>
+      <div class="nav-item" id="navMntRoot" onclick="navigateTo('/mnt')">
+        <span class="nav-item-icon">📦</span>
+        <span>/mnt (Sandboxes & App0)</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="sidebar-section-title">Mod Management</div>
+      <div class="nav-item" onclick="openModMenuModal()">
+        <span class="nav-item-icon">🎮</span>
+        <span>In-Game Mod Menu</span>
+      </div>
+      <div class="nav-item" onclick="openEngineModal()">
+        <span class="nav-item-icon">⚙️</span>
+        <span>Engine Settings</span>
+      </div>
+      <div class="nav-item" onclick="openQuickDlcModal()">
+        <span class="nav-item-icon">⚡</span>
+        <span>Quick Add DLC Mod</span>
+      </div>
+      <div class="nav-item" onclick="openDlcEditorModal()">
+        <span class="nav-item-icon">📝</span>
+        <span>Edit dlclist.xml</span>
+      </div>
+    </div>
+
+    <div style="margin-top: auto; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-md);">
+      <div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 4px;">🚀 Orbx Native Telemetry</div>
+      <div id="engineSidebarInfo" style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Native Orbx: Loading...<br>Legacy PRX: OFF</div>
+    </div>
+  </aside>
+
+  <!-- Workspace Area -->
+  <main class="main-workspace">
+    <!-- Header with Breadcrumbs & Actions -->
+    <div class="workspace-header" style="flex-wrap: wrap; gap: 10px;">
+      <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 320px;">
+        <div class="breadcrumbs" id="breadcrumbs" style="white-space: nowrap; overflow-x: auto;">Loading path...</div>
+        <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
+          <input type="text" id="pathJumpInput" class="modal-input" style="padding: 4px 8px; font-size: 12px; font-family: monospace; width: 220px; height: 30px; margin: 0; background: rgba(0,0,0,0.3); border: 1px solid var(--border);" placeholder="Jump to /path..." onkeydown="if(event.key==='Enter') navigateTo(this.value)">
+          <button class="btn btn-secondary btn-sm" style="padding: 4px 10px; height: 30px;" onclick="navigateTo(document.getElementById('pathJumpInput').value)">Go</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input type="text" class="search-input" id="filterInput" placeholder="Filter files..." oninput="filterFiles()">
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="openNewFolderModal()">
+          <span>➕</span> New Folder
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('folderInput').click()">
+          <span>📁</span> Upload Folder
+        </button>
+        <button class="btn btn-secondary btn-sm" style="border-color: #3b82f6; color: #60a5fa;" onclick="openLogModal()">
+          <span>📋</span> Live Logs
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="openQuickDlcModal()">
+          <span>⚡</span> Add DLC Pack
+        </button>
+        <button class="btn btn-secondary btn-sm" onclick="refreshList()">
+          <span>🔄</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Scrollable Content -->
+    <div class="content-area">
+      <!-- Upload Dropzone -->
+      <div class="drop-card" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" style="display: none;" multiple onchange="handleFiles(this.files)">
+        <input type="file" id="folderInput" style="display: none;" webkitdirectory multiple onchange="handleFolderUpload(this.files)">
+        <div class="drop-icon">📤</div>
+        <div class="drop-title">Drop mod files or folders here to upload to this directory</div>
+        <div class="drop-desc">Supports dlc.rpf, loose .xml/.dat files, and whole mod folders (drag & drop or click Upload Folder)</div>
+        <div class="upload-progress" id="uploadProgress">
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
+          <div class="progress-status">
+            <span id="uploadStatusText">Uploading...</span>
+            <span id="uploadPct">0%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- File Table -->
+      <div class="file-card">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th style="width: 130px;">Size</th>
+              <th style="width: 180px; text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="fileTableBody">
+            <tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 30px;">Loading files from PS5...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ================= MODALS (NO UGLY PROMPT/ALERT) ================= -->
+
+<!-- 1. New Folder Modal -->
+<div class="modal-overlay" id="newFolderModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title"><span>📁</span> Create New Folder</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('newFolderModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <label class="input-label">Folder Name</label>
+        <input type="text" class="modal-input" id="newFolderName" placeholder="e.g. nscout, DimzWeapons, cars" onkeydown="if(event.key==='Enter') submitNewFolder()">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('newFolderModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="submitNewFolder()">Create Folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- 2. Delete Confirmation Modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" style="color: var(--danger);"><span>🗑️</span> Confirm Deletion</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size: 13.5px; line-height: 1.5;">Are you sure you want to permanently delete this item?</p>
+      <div style="background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: var(--radius-md); font-family: monospace; font-size: 12px; color: var(--danger); word-break: break-all;" id="deleteItemPath"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmDelete()">Yes, Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- 3. Quick Add DLC Modal -->
+<div class="modal-overlay" id="quickDlcModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title"><span>⚡</span> Quick Add DLC Mod</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('quickDlcModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <label class="input-label">Mod Folder Name (as placed in /rpf/dlc_addon/)</label>
+        <input type="text" class="modal-input" id="quickDlcModName" placeholder="e.g. nscout, DimzWeapons, s500w222" oninput="updateDlcPreview()">
+      </div>
+      <div>
+        <label class="input-label">Auto-Generated XML Entry</label>
+        <div style="background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: var(--radius-md); font-family: monospace; font-size: 12px; color: var(--accent); word-break: break-all;" id="quickDlcPreview">
+          &lt;Item&gt;/data/orbx/gta/rpf/dlc_addon/.../&lt;/Item&gt;
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('quickDlcModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="submitQuickDlc()">Save & Add to dlclist.xml</button>
+    </div>
+  </div>
+</div>
+
+<!-- 4. Live Log Modal -->
+<div class="modal-overlay" id="logModal">
+  <div class="modal-box" style="max-width: 960px; width: 92%;">
+    <div class="modal-header">
+      <div class="modal-title"><span>📋</span> GTA AFR Engine Live Session Log</div>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <label style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; cursor: pointer;">
+          <input type="checkbox" id="autoRefreshLog" checked onchange="toggleAutoRefresh(this.checked)"> Auto-Refresh (2s)
+        </label>
+        <button class="btn btn-secondary btn-sm" onclick="copyLogContent()">Copy Log</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeModal('logModal')">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" style="padding: 12px 20px;">
+      <pre id="logTerminal" style="background: #090d16; border: 1px solid var(--border); padding: 16px; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #10b981; max-height: 520px; min-height: 260px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5;">Loading live payload logs from PS5...</pre>
+    </div>
+    <div class="modal-footer" style="justify-content: space-between;">
+      <span style="font-size: 11.5px; color: var(--text-muted);" id="logStatus">Endpoint: /api/log</span>
+      <button class="btn btn-secondary btn-sm" onclick="fetchLog()">Refresh Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- 4. Full dlclist.xml / File Editor Modal -->
+<div class="modal-overlay" id="editorModal">
+  <div class="modal-box modal-box-lg">
+    <div class="modal-header">
+      <div class="modal-title" id="editorModalTitle"><span>📝</span> Edit dlclist.xml</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('editorModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <textarea class="code-textarea" id="fileEditorTextarea" placeholder="Loading file content..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('editorModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="submitFileSave()">💾 Save File to PS5</button>
+    </div>
+  </div>
+</div>
+
+<!-- 5. Engine Settings Modal -->
+<div class="modal-overlay" id="engineModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title"><span>⚙️</span> Loader &amp; Engine Settings</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('engineModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:var(--radius-md);">
+        <input type="checkbox" id="cfgNativeOrbx" style="margin-top:3px;" checked>
+        <div>
+          <div style="font-weight:600; color:#fff;">Enable ModHEN Orbx Native (Recommended)</div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Pure PS5 native FS redirection (/data/orbx/gta) with zero XOM code-segment faults.</div>
+        </div>
+      </label>
+      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:var(--radius-md);">
+        <input type="checkbox" id="cfgLegacyPrx" style="margin-top:3px;">
+        <div>
+          <div style="font-weight:600; color:#fff;">Enable Legacy PS4 .prx Slot (Optional)</div>
+          <div style="font-size:11.5px; color:var(--warning); margin-top:2px;">Keep OFF unless loading a PS5-safe v1.00 mod menu .prx. Legacy PS4 orbx.prx crashes on FW 13.60 XOM.</div>
+        </div>
+      </label>
+      <div>
+        <label class="input-label">Optional Legacy .prx Filename in /data/modHEN/plugins/</label>
+        <input type="text" class="modal-input" id="cfgLegacyPrxName" placeholder="Leave blank for auto-detect (e.g. menu_v100.prx)">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('engineModal')">Cancel</button>
+      <button class="btn btn-primary btn-sm" onclick="saveEngineConfig()">💾 Save Engine Settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- In-Game Mod Menu Remote Control Modal -->
+<div class="modal-overlay" id="modMenuModal">
+  <div class="modal" style="max-width:560px;">
+    <div class="modal-header">
+      <h3 class="modal-title">🎮 modHEN In-Game Mod Menu (R1 + D-Pad Left)</h3>
+      <button class="btn-icon" onclick="closeModal('modMenuModal')">✕</button>
+    </div>
+    <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+      <div id="menuStatusBanner" style="font-size:12px; padding:8px 12px; border-radius:var(--radius-md); background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted);">Connecting to GTA V script hook...</div>
+      <div id="menuToggleGrid" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
+      <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Quick Actions & Vehicle Spawner</div>
+      <div style="display:flex; flex-wrap:wrap; gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(1)">❤️ Heal + Armor</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(2)">⭐ Clear Wanted</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(3)">🔫 All Weapons</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(4)">🔧 Repair Car</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(6)">⚡ Boost Car</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(8)">📍 TP Waypoint</button>
+        <button class="btn btn-secondary btn-sm" style="border-color:#10b981; color:#34d399; font-weight:600;" onclick="sendMenuAction(11,0,0x975CD9F6)">🏎️ Revuelto (27rev)</button>
+        <button class="btn btn-secondary btn-sm" style="border-color:#10b981; color:#34d399; font-weight:600;" onclick="sendMenuAction(11,0,0xC593CAF5)">🏎️ GTR R35 (r35)</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xAC5DF515)">🏎️ Zentorno</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB779A091)">🏎️ Adder</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0x2F03547B)">🚁 Buzzard</button>
+        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB39B0AE6)">✈️ Lazer</button>
+      </div>
+      <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Spawn Add-On DLC Vehicle by Name (addon_cars.txt)</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        <input type="text" class="modal-input" id="addonCarName" placeholder="Model name (e.g. 27rev)" style="flex:1; margin:0;">
+        <button class="btn btn-primary btn-sm" onclick="spawnCustomCar(false)">Spawn</button>
+        <button class="btn btn-secondary btn-sm" onclick="spawnCustomCar(true)">Spawn + Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="openFileEditor('/data/orbx/gta/addon_cars.txt')">📝 Edit List</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('modMenuModal')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+let currentPath = "/data/modHEN/plugins";
+let allFiles = [];
+let pendingDeletePath = "";
+let pendingEditPath = "";
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<span>${type === 'success' ? '✓' : (type === 'error' ? '✕' : 'ℹ')}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; setTimeout(() => toast.remove(), 200); }, 3500);
+}
+
+function openModal(id) { document.getElementById(id).classList.add('active'); }
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+async function navigateTo(path) {
+  if (!path) path = '/';
+  currentPath = path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+  
+  const jumpEl = document.getElementById('pathJumpInput');
+  if (jumpEl) jumpEl.value = currentPath;
+
+  // Update sidebar active highlights
+  document.getElementById('navPlugins')?.classList.toggle('active', currentPath === '/data/modHEN/plugins');
+  document.getElementById('navPluginsFallback')?.classList.toggle('active', currentPath === '/data/plugins');
+  document.getElementById('navRoot')?.classList.toggle('active', currentPath === '/data/orbx/gta');
+  document.getElementById('navData')?.classList.toggle('active', currentPath === '/data/orbx/gta/data');
+  document.getElementById('navDlc')?.classList.toggle('active', currentPath === '/data/orbx/gta/rpf/dlc_addon');
+  document.getElementById('navRpf')?.classList.toggle('active', currentPath === '/data/orbx/gta/rpf');
+  document.getElementById('navOrbxCfg')?.classList.toggle('active', currentPath === '/data/orbx');
+  document.getElementById('navFsRoot')?.classList.toggle('active', currentPath === '/');
+  document.getElementById('navDataRoot')?.classList.toggle('active', currentPath === '/data');
+  document.getElementById('navMntRoot')?.classList.toggle('active', currentPath === '/mnt');
+
+  updateBreadcrumbs();
+  await loadFiles();
+}
+
+function updateBreadcrumbs() {
+  const parts = currentPath.split('/').filter(Boolean);
+  let html = `<span class="crumb" onclick="navigateTo('/')">/</span>`;
+  let accum = '';
+  parts.forEach((p, idx) => {
+    accum += '/' + p;
+    const isLast = idx === parts.length - 1;
+    html += ` <span style="opacity:0.4;">/</span> <span class="crumb ${isLast ? 'current' : ''}" onclick="navigateTo('${accum}')">${p}</span>`;
+  });
+  document.getElementById('breadcrumbs').innerHTML = html;
+}
+
+async function loadFiles() {
+  const tbody = document.getElementById('fileTableBody');
+  tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 24px;">Loading...</td></tr>`;
+
+  try {
+    const res = await fetch(`/api/list?path=${encodeURIComponent(currentPath)}`);
+    allFiles = await res.json();
+    renderFileList(allFiles);
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--danger); padding: 24px;">Error reading folder: ${err.message}</td></tr>`;
+  }
+}
+
+function renderFileList(files) {
+  const tbody = document.getElementById('fileTableBody');
+  tbody.innerHTML = '';
+
+  if (currentPath !== '/') {
+    let parent = currentPath.substring(0, currentPath.lastIndexOf('/'));
+    if (!parent) parent = '/';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="3"><div class="file-row-main" onclick="navigateTo('${parent}')"><span class="file-badge badge-folder">DIR</span> <span style="font-weight:600; color:var(--text-muted);">.. (Parent Directory: ${parent})</span></div></td>`;
+    tbody.appendChild(tr);
+  }
+
+  if (!files.length) {
+    tbody.innerHTML += `<tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 36px;">This folder is empty. Drag and drop mods or create a new folder!</td></tr>`;
+    return;
+  }
+
+  files.sort((a,b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
+
+  files.forEach(f => {
+    const tr = document.createElement('tr');
+    const isDir = f.is_dir;
+    const fullPath = (currentPath + '/' + f.name).replace(/\/+/g, '/');
+    
+    let badgeClass = 'badge-file', badgeText = 'FILE';
+    if (isDir) { badgeClass = 'badge-folder'; badgeText = 'DIR'; }
+    else if (f.name.endsWith('.rpf')) { badgeClass = 'badge-rpf'; badgeText = 'RPF'; }
+    else if (f.name.endsWith('.xml') || f.name.endsWith('.meta') || f.name.endsWith('.txt') || f.name.endsWith('.log') || f.name.endsWith('.dat') || f.name.endsWith('.ini')) { badgeClass = 'badge-meta'; badgeText = 'CFG'; }
+
+    const isEditable = !isDir && (f.name.endsWith('.xml') || f.name.endsWith('.meta') || f.name.endsWith('.txt') || f.name.endsWith('.log') || f.name.endsWith('.dat') || f.name.endsWith('.ini'));
+    const clickFn = isDir ? `navigateTo('${fullPath}')` : (isEditable ? `openFileEditor('${fullPath}')` : '');
+
+    tr.innerHTML = `
+      <td>
+        <div class="file-row-main" onclick="${clickFn}">
+          <span class="file-badge ${badgeClass}">${badgeText}</span>
+          <span style="font-weight: 500;">${f.name}</span>
+        </div>
+      </td>
+      <td style="color: var(--text-muted); font-family: monospace;">${isDir ? '-' : formatBytes(f.size)}</td>
+      <td>
+        <div class="file-actions">
+          ${isEditable ? `<button class="btn btn-secondary btn-sm" onclick="openFileEditor('${fullPath}')">Edit</button>` : ''}
+          <button class="btn btn-danger btn-sm" onclick="promptDelete('${fullPath}')">Delete</button>
+        </div>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function filterFiles() {
+  const query = document.getElementById('filterInput').value.toLowerCase().trim();
+  const filtered = allFiles.filter(f => f.name.toLowerCase().includes(query));
+  renderFileList(filtered);
+}
+
+function refreshList() { loadFiles(); showToast('Folder refreshed', 'info'); }
+
+/* New Folder Modal Logic */
+function openNewFolderModal() {
+  document.getElementById('newFolderName').value = '';
+  openModal('newFolderModal');
+  setTimeout(() => document.getElementById('newFolderName').focus(), 100);
+}
+
+async function submitNewFolder() {
+  const name = document.getElementById('newFolderName').value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!name) { showToast('Please enter a valid folder name', 'error'); return; }
+  
+  const targetPath = (currentPath + '/' + name).replace(/\/+/g, '/');
+  try {
+    const res = await fetch(`/api/mkdir?path=${encodeURIComponent(targetPath)}`, { method: 'POST' });
+    if (res.ok) {
+      closeModal('newFolderModal');
+      showToast(`Folder "${name}" created successfully`, 'success');
+      loadFiles();
+    } else {
+      showToast('Failed to create folder', 'error');
+    }
+  } catch (e) {
+    showToast('Network error creating folder', 'error');
+  }
+}
+
+/* Delete Modal Logic */
+function promptDelete(path) {
+  pendingDeletePath = path;
+  document.getElementById('deleteItemPath').textContent = path;
+  openModal('deleteModal');
+}
+
+async function confirmDelete() {
+  if (!pendingDeletePath) return;
+  try {
+    const res = await fetch(`/api/delete?path=${encodeURIComponent(pendingDeletePath)}`, { method: 'POST' });
+    if (res.ok) {
+      closeModal('deleteModal');
+      showToast(`Deleted ${pendingDeletePath.split('/').pop()}`, 'success');
+      loadFiles();
+    } else {
+      showToast('Delete failed', 'error');
+    }
+  } catch (e) {
+    showToast('Network error during delete', 'error');
+  }
+}
+
+/* Quick Add DLC Modal Logic */
+function openQuickDlcModal() {
+  document.getElementById('quickDlcModName').value = '';
+  updateDlcPreview();
+  openModal('quickDlcModal');
+  setTimeout(() => document.getElementById('quickDlcModName').focus(), 100);
+}
+
+function updateDlcPreview() {
+  const name = document.getElementById('quickDlcModName').value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+  document.getElementById('quickDlcPreview').textContent = name
+    ? `<Item>/data/orbx/gta/rpf/dlc_addon/${name}/</Item>`
+    : '<Item>/data/orbx/gta/rpf/dlc_addon/.../</Item>';
+}
+
+async function submitQuickDlc() {
+  const name = document.getElementById('quickDlcModName').value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+  if (!name) { showToast('Please enter a mod name', 'error'); return; }
+
+  try {
+    const res = await fetch(`/api/add_dlc?name=${encodeURIComponent(name)}`, { method: 'POST' });
+    if (res.ok) {
+      closeModal('quickDlcModal');
+      showToast(`Added ${name} to dlclist.xml and prepared folder!`, 'success');
+      loadFiles();
+    } else {
+      showToast('Failed to update dlclist.xml', 'error');
+    }
+  } catch (e) {
+    showToast('Error communicating with PS5', 'error');
+  }
+}
+
+/* File Editor Modal Logic */
+function openDlcEditorModal() {
+  openFileEditor('/data/orbx/gta/dlclist.xml');
+}
+
+async function openFileEditor(path) {
+  pendingEditPath = path;
+  document.getElementById('editorModalTitle').innerHTML = `<span>📝</span> Edit ${path.split('/').pop()}`;
+  document.getElementById('fileEditorTextarea').value = 'Loading file...';
+  openModal('editorModal');
+
+  try {
+    const res = await fetch(`/api/read?path=${encodeURIComponent(path)}`);
+    const text = await res.text();
+    document.getElementById('fileEditorTextarea').value = text;
+  } catch (e) {
+    document.getElementById('fileEditorTextarea').value = 'Error reading file: ' + e.message;
+  }
+}
+
+async function submitFileSave() {
+  if (!pendingEditPath) return;
+  const content = document.getElementById('fileEditorTextarea').value;
+
+  try {
+    const res = await fetch(`/api/write?path=${encodeURIComponent(pendingEditPath)}`, {
+      method: 'POST',
+      body: content
+    });
+    if (res.ok) {
+      closeModal('editorModal');
+      showToast(`Saved ${pendingEditPath.split('/').pop()} successfully!`, 'success');
+      loadFiles();
+    } else {
+      showToast('Save failed', 'error');
+    }
+  } catch (e) {
+    showToast('Error saving file', 'error');
+  }
+}
+
+/* Drag & Drop and Folder Uploading */
+const dropZone = document.getElementById('dropZone');
+['dragenter', 'dragover'].forEach(n => dropZone.addEventListener(n, e => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+['dragleave', 'drop'].forEach(n => dropZone.addEventListener(n, e => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+
+dropZone.addEventListener('drop', async e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const items = e.dataTransfer.items;
+  if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+    const list = [];
+    async function traverse(entry, p) {
+      if (entry.isFile) {
+        const file = await new Promise((res, rej) => entry.file(res, rej));
+        list.push({ file, relPath: p + entry.name });
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        while (true) {
+          const entries = await new Promise((res, rej) => reader.readEntries(res, rej));
+          if (!entries || entries.length === 0) break;
+          for (const sub of entries) {
+            await traverse(sub, p + entry.name + '/');
+          }
+        }
+      }
+    }
+    for (let i = 0; i < items.length; i++) {
+      const entry = items[i].webkitGetAsEntry();
+      if (entry) await traverse(entry, '');
+    }
+    if (list.length > 0) {
+      await uploadFileList(list);
+      return;
+    }
+  }
+  handleFiles(e.dataTransfer.files);
+});
+
+async function uploadFileList(items) {
+  if (!items.length) return;
+  const progressBox = document.getElementById('uploadProgress');
+  const fill = document.getElementById('progressFill');
+  const status = document.getElementById('uploadStatusText');
+  const pctText = document.getElementById('uploadPct');
+  progressBox.style.display = 'block';
+
+  const basePath = (currentPath === '/') ? '' : currentPath;
+  let replacedCount = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const cleanRel = item.relPath.replace(/^\/+/, '');
+    const fullUploadPath = basePath + '/' + cleanRel;
+    const isReplacing = allFiles.some(f => f.name === cleanRel || cleanRel.startsWith(f.name + '/'));
+    if (isReplacing) replacedCount++;
+
+    status.textContent = `Uploading [${i+1}/${items.length}]: ${cleanRel}${isReplacing ? ' (Replacing)' : ''}`;
+    fill.style.width = '0%';
+    pctText.textContent = '0%';
+
+    const uploadUrl = `/api/upload?path=${encodeURIComponent(fullUploadPath)}`;
+    try {
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', uploadUrl, true);
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            fill.style.width = pct + '%';
+            pctText.textContent = pct + '%';
+          }
+        };
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(xhr.statusText || ('HTTP ' + xhr.status)));
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(item.file);
+      });
+    } catch (e) {
+      showToast(`Failed uploading ${cleanRel}: ${e.message}`, 'error');
+    }
+  }
+
+  const msg = replacedCount > 0 
+    ? `Uploaded ${items.length} file(s) (${replacedCount} replaced/overwritten)!`
+    : `Successfully uploaded ${items.length} file(s)!`;
+  status.textContent = msg;
+  showToast(msg, 'success');
+  setTimeout(() => { progressBox.style.display = 'none'; }, 2000);
+  loadFiles();
+}
+
+async function handleFolderUpload(files) {
+  if (!files || !files.length) return;
+  const list = [];
+  for (let i = 0; i < files.length; i++) {
+    let rel = files[i].webkitRelativePath || files[i].name;
+    rel = rel.replace(/^\/+/, '');
+    if (!rel) continue;
+    list.push({ file: files[i], relPath: rel });
+  }
+  await uploadFileList(list);
+}
+
+async function handleFiles(files) {
+  if (!files || !files.length) return;
+  const list = [];
+  for (let i = 0; i < files.length; i++) {
+    list.push({ file: files[i], relPath: files[i].name });
+  }
+  await uploadFileList(list);
+}
+
+// ================= LIVE LOG VIEWER =================
+let logInterval = null;
+
+function openLogModal() {
+  openModal('logModal');
+  fetchLog();
+  if (document.getElementById('autoRefreshLog').checked) {
+    startLogTimer();
+  }
+}
+
+function startLogTimer() {
+  stopLogTimer();
+  logInterval = setInterval(fetchLog, 1000);
+}
+
+function stopLogTimer() {
+  if (logInterval) {
+    clearInterval(logInterval);
+    logInterval = null;
+  }
+}
+
+function toggleAutoRefresh(enabled) {
+  if (enabled) startLogTimer();
+  else stopLogTimer();
+}
+
+async function fetchLog() {
+  const terminal = document.getElementById('logTerminal');
+  const status = document.getElementById('logStatus');
+  try {
+    const res = await fetch('/api/log?t=' + Date.now());
+    if (res.ok) {
+      const text = await res.text();
+      terminal.textContent = text || '[modHEN] Log buffer is empty.';
+      terminal.scrollTop = terminal.scrollHeight;
+      status.textContent = 'Updated at ' + new Date().toLocaleTimeString();
+    } else {
+      terminal.textContent = '[modHEN] Error fetching log (HTTP ' + res.status + ')';
+    }
+  } catch (e) {
+    terminal.textContent = '[modHEN] Waiting for log daemon... (' + e.message + ')';
+  }
+}
+
+async function openEngineModal() {
+  try {
+    const res = await fetch('/api/config?t=' + Date.now());
+    if (res.ok) {
+      const cfg = await res.json();
+      document.getElementById('cfgNativeOrbx').checked = !!cfg.native_orbx;
+      document.getElementById('cfgLegacyPrx').checked = !!cfg.legacy_prx;
+      document.getElementById('cfgLegacyPrxName').value = cfg.legacy_prx_name || '';
+    }
+  } catch (e) {}
+  openModal('engineModal');
+}
+
+async function saveEngineConfig() {
+  const nativeOrbx = document.getElementById('cfgNativeOrbx').checked ? '1' : '0';
+  const legacyPrx = document.getElementById('cfgLegacyPrx').checked ? '1' : '0';
+  const legacyName = document.getElementById('cfgLegacyPrxName').value.trim();
+  const url = `/api/config?native_orbx=${nativeOrbx}&legacy_prx=${legacyPrx}&legacy_prx_name=${encodeURIComponent(legacyName)}`;
+  try {
+    const res = await fetch(url, { method: 'POST' });
+    if (res.ok) {
+      closeModal('engineModal');
+      showToast('Engine settings saved to /data/modHEN/config.ini (takes effect on next game launch)', 'success');
+      pollGameStatus();
+    } else {
+      showToast('Failed to save engine settings', 'error');
+    }
+  } catch (e) {
+    showToast('Network error saving settings', 'error');
+  }
+}
+
+const MENU_TOGGLE_DEFS = [
+  ['menu_open', 'Show In-Game Menu'],
+  ['godmode', 'God Mode'],
+  ['never_wanted', 'Never Wanted'],
+  ['super_jump', 'Super Jump'],
+  ['fast_run', 'Fast Run / Swim'],
+  ['no_ragdoll', 'No Ragdoll'],
+  ['inf_ammo', 'Infinite Clip Ammo'],
+  ['explosive_ammo', 'Explosive Ammo'],
+  ['veh_god', 'Vehicle God Mode'],
+  ['horn_boost', 'Horn Boost (L3)']
+];
+
+async function refreshModMenuState() {
+  try {
+    const res = await fetch('/api/menu?t=' + Date.now());
+    if (!res.ok) return;
+    const d = await res.json();
+    const banner = document.getElementById('menuStatusBanner');
+    if (banner) {
+      banner.textContent = d.ready && d.armed
+        ? `ACTIVE | Ticks: ${d.ticks} | FPS: ${d.fps.toFixed(1)} | PadCalls: ${d.pad_calls || 0} (raw: 0x${(d.pad_raw || 0).toString(16)}) | Open: R1 + D-Pad Left`
+        : 'Waiting for GTA V gameplay script thread (main_persistent)...';
+    }
+    const grid = document.getElementById('menuToggleGrid');
+    if (grid) {
+      grid.innerHTML = MENU_TOGGLE_DEFS.map(([k, lbl]) => {
+        const on = !!d[k];
+        const col = on ? '#10b981' : '#64748b';
+        return `<button class="btn btn-secondary btn-sm" style="justify-content:space-between; display:flex; border-color:${on ? 'rgba(16,185,129,0.5)' : 'var(--border)'};" onclick="toggleMenuOpt('${k}', ${on ? 0 : 1})"><span>${lbl}</span><strong style="color:${col};">${on ? 'ON' : 'OFF'}</strong></button>`;
+      }).join('');
+    }
+  } catch (e) {}
+}
+
+function openModMenuModal() {
+  openModal('modMenuModal');
+  refreshModMenuState();
+}
+
+async function toggleMenuOpt(k, v) {
+  await fetch(`/api/menu?toggle=${encodeURIComponent(k)}&val=${v}`, { method: 'POST' });
+  refreshModMenuState();
+}
+
+async function sendMenuAction(act, arg0 = 0, spawn = 0) {
+  const res = await fetch(`/api/menu?action=${act}&arg0=${arg0}&spawn=${spawn}`, { method: 'POST' });
+  showToast(res.ok ? 'Command queued to GTA V!' : 'Launch GTA V gameplay first', res.ok ? 'success' : 'warning');
+}
+
+async function spawnCustomCar(save) {
+  const name = (document.getElementById('addonCarName')?.value || '').trim();
+  if (!name) { showToast('Enter a vehicle model name (e.g. 27rev)', 'warning'); return; }
+  const res = await fetch(`/api/menu?name=${encodeURIComponent(name)}&save=${save ? 1 : 0}`, { method: 'POST' });
+  showToast(res.ok ? `Spawning '${name}'...` : 'Launch GTA V gameplay first', res.ok ? 'success' : 'warning');
+}
+
+async function pollGameStatus() {
+  try {
+    const res = await fetch('/api/status?t=' + Date.now());
+    if (res.ok) {
+      const data = await res.json();
+      const textEl = document.getElementById('gameStatusText');
+      const pill = document.getElementById('gameStatusPill');
+      const infoEl = document.getElementById('engineSidebarInfo');
+      if (infoEl) {
+        const natLabel = data.native_orbx ? (data.native_active ? 'ACTIVE' : 'READY') : 'OFF';
+        const prxLabel = data.legacy_prx ? ('ON' + (data.legacy_prx_name ? ` (${data.legacy_prx_name})` : '')) : 'OFF';
+        infoEl.innerHTML = `Native Orbx: <strong style="color:#fff;">${natLabel}</strong><br>Legacy PRX: ${prxLabel}<br>Mods: ${data.mod_count || 0} | Redir: ${data.fs_redirects || 0}`;
+      }
+      if (data.game_running) {
+        const redirText = data.native_active ? ` | Mods:${data.mod_count} Redir:${data.fs_redirects}` : '';
+        textEl.textContent = `GTA V Running (PID ${data.pid} - ${data.title_id || 'CUSA00419'}${redirText})`;
+        pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        pill.style.background = 'rgba(16, 185, 129, 0.15)';
+      } else {
+        textEl.textContent = 'Waiting for GTA V Launch...';
+        pill.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+        pill.style.background = 'rgba(245, 158, 11, 0.08)';
+      }
+    }
+  } catch (e) {}
+}
+
+function copyLogContent() {
+  const terminal = document.getElementById('logTerminal');
+  const text = terminal ? terminal.textContent : '';
+  if (!text) {
+    showToast('Log is currently empty', 'warning');
+    return;
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('All logs copied to clipboard!', 'success');
+    }).catch(() => fallbackCopy(text));
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.width = '2em';
+    ta.style.height = '2em';
+    ta.style.padding = '0';
+    ta.style.border = 'none';
+    ta.style.outline = 'none';
+    ta.style.boxShadow = 'none';
+    ta.style.background = 'transparent';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    if (ok) {
+      showToast('All logs copied to clipboard!', 'success');
+    } else {
+      showToast('Please select text manually and copy', 'warning');
+    }
+  } catch (err) {
+    showToast('Copy error, please select manually', 'error');
+  }
+}
+
+// Initial Navigation, Status, and Live Log Polling
+navigateTo('/data/modHEN/plugins');
+pollGameStatus();
+setInterval(pollGameStatus, 3000);
+fetchLog();
+setInterval(fetchLog, 2000);
+</script>
+</body>
+</html>

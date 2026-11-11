@@ -1,0 +1,32 @@
+# Build artifacts & object files
+*.o
+*.obj
+*.d
+*.bin
+*.hex.txt
+*.prx.o
+
+# Large compressed archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+
+# Large reference engine dumps & asset packs
+Orbx Engine*
+NaturalVision*
+Oxagon*
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+.vscode/
+.idea/
+
+# Python caches
+__pycache__/
+*.pyc
