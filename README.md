@@ -103,6 +103,7 @@ The repository includes a comprehensive suite of automated converters to transla
 * **`ps4_awc_crypt.c`**: High-performance C tool for decrypting and encrypting PS4 GTA V audio archives using the proprietary XXTEA key schedule.
 * **`build_nve_renew.py` & `build_all_nve_dlcs.py`**: Converts and packages authentic NaturalVision Evolved graphics, clouds (`v_clouds.rpf`), lights, and water for PS5.
 * **`sync_nve_renew_to_ps5.py`**: Fast live uploader to sync timecycles, HBAO, and visual settings directly to the console over HTTP / FTP.
+* **`apply_weather_bloom.py`**: Weather- and time-dependent subtle bloom tuner (calibrates vehicle paint, building surface, and specular bloom across 18 weather types and 13 time slots).
 * **`apply_streetlight_fixes.py`**: Tunes night streetlight coronas, volumetric fog cones, and ambient lighting for realistic darkness.
 
 ---
