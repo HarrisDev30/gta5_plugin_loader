@@ -8,7 +8,10 @@
 extern "C" {
 #endif
 
-#define ORBX_NATIVE_MAGIC      UINT64_C(0x4f52425850533531) // "ORBXPS51"
+#define ORBX_NATIVE_MAGIC             UINT64_C(0x4f52425850533532) // "ORBXPS52"
+#define ORBX_NATIVE_MAGIC_PREFIX      UINT64_C(0x4f52425850533500) // "ORBXPS5?"
+#define ORBX_NATIVE_MAGIC_PREFIX_MASK UINT64_C(0xffffffffffffff00)
+#define ORBX_NATIVE_ABI_VERSION       5u
 #define ORBX_MAX_MOD_ENTRIES   4096u
 #define ORBX_STRING_POOL_BYTES (256u * 1024u)
 #define ORBX_LOG_RING_SLOTS    512u
@@ -34,7 +37,8 @@ extern "C" {
 #define ORBX_ENTRY_OFF_MENU_WAIT         0xf0u
 #define ORBX_ENTRY_OFF_SCE_PAD_READ_STATE 0x100u
 #define ORBX_ENTRY_OFF_SCE_PAD_READ      0x110u
-#define ORBX_ENTRY_MIN_BIN_SIZE          0x120u
+#define ORBX_ENTRY_OFF_SCE_VIDEO_REG_BUFS 0x120u
+#define ORBX_ENTRY_MIN_BIN_SIZE          0x130u
 
 typedef struct {
     uint64_t magic;     // ORBX_NATIVE_MAGIC
@@ -73,10 +77,80 @@ typedef struct {
     char     name[48];
 } OrbxTrackedFd;
 
+/* GNM Graphics Pipeline & Crash Telemetry Probes (Phase 0 Read-Only) */
+typedef struct {
+    uint64_t backbuffers[4];
+    uint32_t backbuffer_count;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint32_t format;
+    int32_t  handle;
+    uint64_t last_reg_tick;
+} GnmSwapchainProbe;
+
+typedef struct {
+    volatile uint32_t stage;              /* 0=IDLE, 1=PROBE_SWAPCHAIN, 2=IN_FLIP_HOOK, 3=TELEMETRY_READY */
+    volatile uint32_t last_display_index; /* Active backbuffer flipped (0, 1, or 2) */
+    volatile uint64_t last_backbuffer_va; /* Active target GPU VA */
+    volatile uint32_t last_dcb_count;     /* Number of DCBs submitted */
+    volatile uint32_t last_dcb_total_sz;  /* Total bytes across all DCBs */
+    volatile uint64_t last_dcb_va;        /* First DCB GPU address */
+    volatile uint64_t last_flip_tick;     /* Monotonic flip counter */
+    volatile uint32_t stall_count;        /* Watchdog stall count */
+} GnmCrashProbe;
+
+/* Stage 1 Real-Time PSSL .sb Post-Processing Shader Telemetry & Tunables */
+typedef struct {
+    volatile uint32_t enabled;           /* 0=Pass-Through, 1=Active Post-Processing */
+    volatile uint32_t loaded;            /* 0=None, 1=Valid .sb Loaded, 2=Validation Error */
+    volatile uint32_t shader_type;       /* 1=CS_5_0 Compute Shader, 2=PS_5_0 Pixel Shader */
+    volatile uint32_t shader_size;       /* Byte size of .sb file */
+    volatile uint64_t shader_gpu_va;     /* Direct GPU Garlic VA where microcode is mapped */
+    volatile uint32_t error_code;        /* 0=OK, 1=NOT_FOUND, 2=TOO_SMALL, 3=BAD_MAGIC, 4=BAD_ALIGN, 5=ALLOC_FAIL */
+    volatile uint32_t dispatches;        /* Execution dispatch count */
+
+    /* Live Parameters passed in CB0 constant buffer */
+    volatile float    bloom_threshold;   /* Default ~0.85f */
+    volatile float    bloom_intensity;   /* Default ~0.35f */
+    volatile float    exposure;          /* Default ~1.00f */
+    volatile float    contrast;          /* Default ~1.05f */
+    volatile float    saturation;        /* Default ~1.10f */
+    volatile float    vignette;          /* Default ~0.20f */
+    volatile float    color_temp;        /* Default 6500.0f */
+    volatile float    film_grain;        /* Default 0.00f */
+    volatile float    anti_aliasing;     /* Default ~0.35f: Subpixel Edge Smoothing */
+    volatile float    sharpness;         /* Default ~0.20f: Contrast-Adaptive Sharpness */
+
+    char     shader_file[64];            /* "/data/orbx/shaders/postprocess.sb" */
+    char     last_error_msg[64];         /* Status / error breadcrumb */
+} GnmShaderProbe;
+
+/* Stage 2 Depth Buffer, Normal G-Buffer & Screen-Space Telemetry (SSAO / SSR) */
+typedef struct {
+    volatile uint32_t stage;               /* 0=IDLE, 1=SCANNING_DCB, 2=DEPTH_FOUND, 3=SSAO_ACTIVE */
+    volatile uint64_t depth_buffer_va;     /* GPU VA of active Z-Buffer (read-only detected) */
+    volatile uint32_t depth_width;         /* Surface width e.g. 1920 */
+    volatile uint32_t depth_height;        /* Surface height e.g. 1080 */
+    volatile uint32_t depth_format;        /* Format e.g. 0=Z32_FLOAT, 1=Z24_UNORM_S8 */
+    volatile uint32_t depth_samples;       /* MSAA samples (1, 2, 4) */
+    volatile uint64_t depth_hits;          /* Number of depth bindings detected */
+    volatile uint32_t ssao_mode;           /* 0=Off/Native, 1=QuantV High SSAO, 2=Ultra HBAO+ */
+    volatile float    ssao_intensity;      /* Occlusion multiplier (e.g. 1.0f - 6.0f, default 5.80f) */
+    volatile float    ssao_radius;         /* Sample radius (default 1.00f) */
+    volatile float    ssao_cp_strength;    /* Contact point shadow strength (default 0.78f) */
+    volatile float    ssr_intensity;       /* Reflection HDR multiplier (default 2.45f) */
+    volatile float    ssr_distance;        /* Max reflection distance in meters (default 500.0f) */
+} GnmDepthProbe;
+
 typedef struct {
     uint64_t magic;
     uint64_t code_base;
     uint64_t ctx_base;
+    uint32_t abi_version;
+    uint32_t ctx_size;
+    uint64_t code_alloc_size;
+    uint64_t orig_wait;
     OrbxNativeConfig cfg;
 
     // Resolved real function targets in libkernel.sprx / libSceLibcInternal.sprx / libSceVideoOut.sprx
@@ -120,6 +194,18 @@ typedef struct {
     char string_pool[ORBX_STRING_POOL_BYTES];
 
     OrbxMenuState menu;
+
+    // Freestanding PIC scratch buffer in RW anonymous heap (avoids stack bloat in hooked WAIT)
+    uint8_t menu_rows_scratch[64u * 128u];
+
+    GnmSwapchainProbe swapchain_probe;
+    GnmCrashProbe     gnm_probe;
+    GnmShaderProbe    shader_probe;
+    GnmDepthProbe     depth_probe;
+    uint64_t          orig_sceVideoOutRegisterBuffers;
+    uint64_t          fn_get_dmem_size;
+    uint64_t          fn_alloc_dmem;
+    uint64_t          fn_map_dmem;
 } OrbxNativeContext;
 
 #ifdef __cplusplus

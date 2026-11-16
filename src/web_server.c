@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -17,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -62,6 +65,33 @@ void set_web_server_game_status(int running, pid_t pid, const char *title_id) {
     }
 }
 
+static int write_all_fd(int fd, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+    int eagain_retries = 0;
+    while (sent < len) {
+#ifdef MSG_NOSIGNAL
+        ssize_t w = send(fd, p + sent, len - sent, MSG_NOSIGNAL);
+#else
+        ssize_t w = write(fd, p + sent, len - sent);
+#endif
+        if (w > 0) {
+            sent += (size_t)w;
+            eagain_retries = 0;
+            continue;
+        }
+        if (w < 0 && errno == EINTR) {
+            continue;
+        }
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && eagain_retries < 2) {
+            eagain_retries++;
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
 static void send_http_response(int fd, int status_code, const char *status_text, 
                                const char *content_type, const void *data, size_t len) {
     char header[512];
@@ -76,9 +106,11 @@ static void send_http_response(int fd, int status_code, const char *status_text,
         "Connection: close\r\n\r\n",
         status_code, status_text, content_type, len);
         
-    write(fd, header, hlen);
+    if (hlen > 0) {
+        if (write_all_fd(fd, header, (size_t)hlen) != 0) return;
+    }
     if (data && len > 0) {
-        write(fd, data, len);
+        write_all_fd(fd, data, len);
     }
 }
 
@@ -311,21 +343,132 @@ static void handle_api_menu_get(int client_fd) {
     OrbxMenuState ms;
     memset(&ms, 0, sizeof(ms));
     int ok = (get_orbx_menu_state(&ms) == 0);
-    char resp[768];
+    if (!ok) {
+        ms.lock_hour = -1;
+        ms.cloud_hat_idx = -1;
+        ms.cloud_keyframe_idx = -1;
+        ms.density_pct = 100u;
+        ms.cloud_alpha_pct = 100u;
+        ms.gfx_strength_pct = 100u;
+        ms.menu_scale = 1u;
+    }
+    char safe_arg[40] = {0};
+    size_t j = 0;
+    for (size_t i = 0; i < sizeof(ms.probe_last_arg) && ms.probe_last_arg[i] != '\0' && j + 1 < sizeof(safe_arg); i++) {
+        char c = ms.probe_last_arg[i];
+        if (c == '"' || c == '\\' || (unsigned char)c < 32) continue;
+        safe_arg[j++] = c;
+    }
+    safe_arg[j] = '\0';
+
+    GnmCrashProbe gprobe = {0};
+    uint64_t gnm_flips = 0;
+    get_orbx_gnm_probe(&gprobe, &gnm_flips);
+
+    GnmShaderProbe sprobe = {0};
+    get_orbx_shader_probe(&sprobe);
+
+    GnmDepthProbe dprobe = {0};
+    get_orbx_depth_probe(&dprobe);
+
+    char cars_json[4096];
+    size_t cj_len = 0;
+    cars_json[0] = '\0';
+    uint32_t ac_cnt = ms.addon_car_count;
+    if (ac_cnt > ORBX_MAX_ADDON_CARS) ac_cnt = ORBX_MAX_ADDON_CARS;
+    for (uint32_t i = 0; i < ac_cnt; i++) {
+        if (!ms.addon_cars[i].name[0]) continue;
+        char item[128];
+        int ilen = snprintf(item, sizeof(item),
+                            "%s{\"name\":\"%s\",\"label\":\"%s\",\"hash\":\"0x%08X\"}",
+                            (cj_len > 0) ? "," : "",
+                            ms.addon_cars[i].name,
+                            ms.addon_cars[i].label[0] ? ms.addon_cars[i].label : ms.addon_cars[i].name,
+                            ms.addon_cars[i].hash);
+        if (cj_len + (size_t)ilen + 1 < sizeof(cars_json)) {
+            memcpy(cars_json + cj_len, item, (size_t)ilen);
+            cj_len += (size_t)ilen;
+            cars_json[cj_len] = '\0';
+        }
+    }
+
+    char resp[8192];
     int len = snprintf(resp, sizeof(resp),
         "{\"ready\":%s,\"armed\":%u,\"ticks\":%u,\"fps\":%.1f,\"menu_open\":%u,"
         "\"pad_calls\":%u,\"pad_raw\":%u,\"last_btns\":%u,"
         "\"godmode\":%u,\"never_wanted\":%u,\"super_jump\":%u,\"fast_run\":%u,"
-        "\"no_ragdoll\":%u,\"inf_ammo\":%u,\"explosive_ammo\":%u,\"fire_ammo\":%u,"
-        "\"explosive_melee\":%u,\"veh_god\":%u,\"horn_boost\":%u,"
-        "\"density_pct\":%u,\"lock_hour\":%d,\"weather_idx\":%d}",
+        "\"no_ragdoll\":%u,\"invisible\":%u,\"noclip_on\":%u,\"spec_ability_inf\":%u,"
+        "\"inf_ammo\":%u,\"explosive_ammo\":%u,\"fire_ammo\":%u,\"explosive_melee\":%u,"
+        "\"veh_god\":%u,\"seatbelt_on\":%u,\"horn_boost\":%u,"
+        "\"veh_drift_mode\":%u,\"speedo_mode\":%u,"
+        "\"fuel_system_on\":%u,\"fuel_level\":%.1f,\"calmer_police_on\":%u,"
+        "\"gta6_hud_on\":%u,\"gta6_wheel_on\":%u,"
+        "\"density_pct\":%u,\"lock_hour\":%d,\"weather_idx\":%d,\"weather_persist\":%u,"
+        "\"clock_paused\":%u,\"time_scale_idx\":%u,\"low_gravity\":%u,\"mobile_radio\":%u,"
+        "\"cloud_hat_idx\":%d,\"cloud_keyframe_idx\":%d,\"cloud_alpha_pct\":%u,"
+        "\"fp_fov_idx\":%u,\"fp_lock\":%u,\"fp_clip_fix\":%u,"
+        "\"afp_mode\":%u,\"afp_fov_idx\":%u,\"afp_headbob\":%u,\"afp_smooth_follow\":%u,"
+        "\"afp_recoil\":%u,\"afp_inertia\":%u,\"afp_crouch_lower\":%u,\"afp_ads_zoom\":%u,"
+        "\"afp_crosshair\":%u,\"afp_autoturn\":%u,\"afp_clip_fix\":%u,"
+        "\"cinematic_cam\":%u,\"cam_anti_shake\":%u,"
+        "\"cam_ped_view_mode\":%u,\"cam_veh_view_mode\":%u,"
+        "\"menu_position\":%u,\"menu_scale\":%u,\"theme_accent\":%u,"
+        "\"keep_steering\":%u,\"nav_stick\":%u,\"sound_enabled\":%u,"
+        "\"bind_open_mod\":%u,\"bind_open_btn\":%u,\"bind_accept\":%u,\"bind_cancel\":%u,"
+        "\"bind_tab_prev\":%u,\"bind_tab_next\":%u,\"bind_horn_boost\":%u,\"bind_noclip\":%u,"
+        "\"bind_quick_repair\":%u,\"bind_quick_heal\":%u,\"bind_super_brake\":%u,"
+        "\"gfx_preset_idx\":%u,\"gfx_strength_pct\":%u,\"gfx_film_grain\":%u,\"gfx_postfx_idx\":%u,"
+        "\"enb_extra_active\":%u,\"enb_shadow_soft\":%u,\"enb_shadow_scale\":%u,"
+        "\"probe_stage\":%u,\"probe_last_native_id\":%u,\"probe_resolved_count\":%u,"
+        "\"probe_total_natives\":%u,\"probe_last_arg\":\"%s\","
+        "\"gnm_stage\":%u,\"gnm_display_idx\":%u,\"gnm_dcb_count\":%u,\"gnm_dcb_total_kb\":%u,\"gnm_flips\":%llu,"
+        "\"shader_loaded\":%u,\"shader_enabled\":%u,\"shader_type\":%u,\"shader_size\":%u,"
+        "\"shader_dispatches\":%u,\"shader_err\":%u,\"shader_msg\":\"%s\","
+        "\"shader_bloom_thresh\":%.2f,\"shader_bloom_int\":%.2f,\"shader_exposure\":%.2f,"
+        "\"shader_contrast\":%.2f,\"shader_saturation\":%.2f,\"shader_vignette\":%.2f,"
+        "\"shader_aa\":%.2f,\"shader_sharpness\":%.2f,"
+        "\"depth_va\":\"0x%llX\",\"depth_width\":%u,\"depth_height\":%u,\"depth_hits\":%llu,"
+        "\"ssao_int\":%.2f,\"ssao_cp\":%.2f,\"ssr_int\":%.2f,\"ssr_dist\":%.1f,"
+        "\"addon_car_count\":%u,\"addon_cars\":[%s]}",
         ok ? "true" : "false",
         ms.armed, ms.main_ticks, (double)ms.fps_x10 / 10.0, ms.menu_open,
         ms.pad_calls, ms.pad_raw_seen, ms.prev_btn_mask,
         ms.godmode, ms.never_wanted, ms.super_jump, ms.fast_run,
-        ms.no_ragdoll, ms.inf_ammo, ms.explosive_ammo, ms.fire_ammo,
-        ms.explosive_melee, ms.veh_god, ms.horn_boost,
-        ms.density_pct, (int)ms.lock_hour, (int)ms.weather_idx);
+        ms.no_ragdoll, ms.invisible, ms.noclip_on, ms.spec_ability_inf,
+        ms.inf_ammo, ms.explosive_ammo, ms.fire_ammo, ms.explosive_melee,
+        ms.veh_god, ms.seatbelt_on, ms.horn_boost,
+        ms.veh_drift_mode, ms.speedo_mode,
+        ms.fuel_system_on, (double)ms.fuel_level, ms.calmer_police_on,
+        ms.gta6_hud_on, ms.gta6_wheel_on,
+        ms.density_pct, (int)ms.lock_hour, (int)ms.weather_idx, ms.weather_persist,
+        ms.clock_paused, ms.time_scale_idx, ms.low_gravity, ms.mobile_radio,
+        (int)ms.cloud_hat_idx, (int)ms.cloud_keyframe_idx, ms.cloud_alpha_pct,
+        ms.fp_fov_idx, ms.fp_lock, ms.fp_clip_fix,
+        ms.afp_mode, ms.afp_fov_idx, ms.afp_headbob, ms.afp_smooth_follow,
+        ms.afp_recoil, ms.afp_inertia, ms.afp_crouch_lower, ms.afp_ads_zoom,
+        ms.afp_crosshair, ms.afp_autoturn, ms.afp_clip_fix,
+        ms.cinematic_cam, ms.cam_anti_shake,
+        ms.cam_ped_view_mode, ms.cam_veh_view_mode,
+        ms.menu_position, ms.menu_scale, ms.theme_accent,
+        ms.keep_steering, ms.nav_stick, ms.sound_enabled,
+        ms.bind_open_mod, ms.bind_open_btn, ms.bind_accept, ms.bind_cancel,
+        ms.bind_tab_prev, ms.bind_tab_next, ms.bind_horn_boost, ms.bind_noclip,
+        ms.bind_quick_repair, ms.bind_quick_heal, ms.bind_super_brake,
+        ms.gfx_preset_idx, ms.gfx_strength_pct ? ms.gfx_strength_pct : 100u,
+        ms.gfx_film_grain, ms.gfx_postfx_idx,
+        ms.enb_extra_active, ms.enb_shadow_soft, ms.enb_shadow_scale,
+        ms.probe_stage, ms.probe_last_native_id, ms.probe_resolved_count,
+        (unsigned)ORBX_NAT_COUNT, safe_arg[0] ? safe_arg : "NONE",
+        gprobe.stage, gprobe.last_display_index, gprobe.last_dcb_count,
+        (gprobe.last_dcb_total_sz / 1024u), (unsigned long long)gnm_flips,
+        sprobe.loaded, sprobe.enabled, sprobe.shader_type, sprobe.shader_size,
+        sprobe.dispatches, sprobe.error_code, sprobe.last_error_msg,
+        sprobe.bloom_threshold, sprobe.bloom_intensity, sprobe.exposure,
+        sprobe.contrast, sprobe.saturation, sprobe.vignette,
+        sprobe.anti_aliasing, sprobe.sharpness,
+        (unsigned long long)dprobe.depth_buffer_va, dprobe.depth_width, dprobe.depth_height, (unsigned long long)dprobe.depth_hits,
+        dprobe.ssao_intensity, dprobe.ssao_cp_strength, dprobe.ssr_intensity, dprobe.ssr_distance,
+        ac_cnt, cars_json);
     send_http_response(client_fd, 200, "OK", "application/json", resp, len);
 }
 
@@ -372,6 +515,169 @@ static void handle_api_menu_post(int client_fd, const char *url) {
     handle_api_menu_get(client_fd);
 }
 
+static void handle_api_log_clear(int client_fd) {
+    FILE *lf = fopen(LOG_PATH, "wb");
+    if (lf) fclose(lf);
+
+    pthread_mutex_lock(&g_live_log_mutex);
+    const char *cleared = "[modHEN] Logs cleared.\n";
+    size_t clen = strlen(cleared);
+    memcpy(g_live_log, cleared, clen);
+    g_live_log_len = clen;
+    g_live_log[g_live_log_len] = '\0';
+    pthread_mutex_unlock(&g_live_log_mutex);
+
+    send_http_response(client_fd, 200, "OK", "application/json", "{\"status\":\"ok\",\"message\":\"Logs cleared\"}", 39);
+}
+
+static void handle_api_shader_get(int client_fd) {
+    GnmShaderProbe sp = {0};
+    get_orbx_shader_probe(&sp);
+    char resp[1024];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"loaded\":%u,\"enabled\":%u,\"shader_type\":%u,\"size\":%u,"
+        "\"dispatches\":%u,\"error_code\":%u,\"msg\":\"%s\",\"file\":\"%s\","
+        "\"bloom_threshold\":%.2f,\"bloom_intensity\":%.2f,\"exposure\":%.2f,"
+        "\"contrast\":%.2f,\"saturation\":%.2f,\"vignette\":%.2f,"
+        "\"anti_aliasing\":%.2f,\"sharpness\":%.2f}",
+        sp.loaded, sp.enabled, sp.shader_type, sp.shader_size,
+        sp.dispatches, sp.error_code, sp.last_error_msg, sp.shader_file,
+        sp.bloom_threshold, sp.bloom_intensity, sp.exposure,
+        sp.contrast, sp.saturation, sp.vignette,
+        sp.anti_aliasing, sp.sharpness);
+    send_http_response(client_fd, 200, "OK", "application/json", resp, len);
+}
+
+static void handle_api_shader_post(int client_fd, const char *url) {
+    char tog_s[16] = {0}, rel_s[16] = {0};
+    char bth_s[16] = {0}, bin_s[16] = {0}, exp_s[16] = {0}, con_s[16] = {0}, sat_s[16] = {0}, vig_s[16] = {0};
+    char aa_s[16] = {0}, sharp_s[16] = {0};
+
+    get_query_param(url, "toggle", tog_s, sizeof(tog_s));
+    get_query_param(url, "reload", rel_s, sizeof(rel_s));
+    get_query_param(url, "bth", bth_s, sizeof(bth_s));
+    get_query_param(url, "bin", bin_s, sizeof(bin_s));
+    get_query_param(url, "exp", exp_s, sizeof(exp_s));
+    get_query_param(url, "con", con_s, sizeof(con_s));
+    get_query_param(url, "sat", sat_s, sizeof(sat_s));
+    get_query_param(url, "vig", vig_s, sizeof(vig_s));
+    get_query_param(url, "aa", aa_s, sizeof(aa_s));
+    get_query_param(url, "sharp", sharp_s, sizeof(sharp_s));
+
+    if (rel_s[0] != '\0') {
+        reload_orbx_shaders();
+    }
+    if (tog_s[0] != '\0') {
+        uint32_t en = (uint32_t)atoi(tog_s);
+        set_orbx_shader_enabled(en);
+    }
+    if (bth_s[0] != '\0' || bin_s[0] != '\0' || exp_s[0] != '\0' || con_s[0] != '\0' ||
+        sat_s[0] != '\0' || vig_s[0] != '\0' || aa_s[0] != '\0' || sharp_s[0] != '\0') {
+        char focus_s[16] = {0};
+        get_query_param(url, "focus", focus_s, sizeof(focus_s));
+
+        GnmShaderProbe sp = {0};
+        get_orbx_shader_probe(&sp);
+        float bth = bth_s[0] ? (float)atof(bth_s) : sp.bloom_threshold;
+        float bint = bin_s[0] ? (float)atof(bin_s) : sp.bloom_intensity;
+        float exp = exp_s[0] ? (float)atof(exp_s) : sp.exposure;
+        float con = con_s[0] ? (float)atof(con_s) : sp.contrast;
+        float sat = sat_s[0] ? (float)atof(sat_s) : sp.saturation;
+        float vig = vig_s[0] ? (float)atof(vig_s) : sp.vignette;
+        float aa  = aa_s[0]  ? (float)atof(aa_s)  : sp.anti_aliasing;
+        float shp = sharp_s[0]? (float)atof(sharp_s): sp.sharpness;
+        set_orbx_shader_tunables(bth, bint, exp, con, sat, vig, aa, shp);
+
+        /* Real-Time PC ENB Post-FX Stacking:
+         * Does NOT replace the user's active ENB preset!
+         * - Bloom: layers MODHEN_ENB_BLOOM on the extra layer.
+         * - Sharpness / AA: drives native SET_NOISINESSOVERIDE film grain / sharpening.
+         * - Exposure & Contrast: dynamically tunes the brightness & shadow contrast of the base preset! */
+        if (strcmp(focus_s, "bin") == 0 || strcmp(focus_s, "bth") == 0) {
+            if (bint > 0.45f) {
+                trigger_orbx_menu_action(ORBX_ACT_SET_ENB_EXTRA, 2, 0); /* 2 = MODHEN_ENB_BLOOM */
+            } else {
+                trigger_orbx_menu_action(ORBX_ACT_SET_ENB_EXTRA, 0, 0);
+            }
+        } else if (strcmp(focus_s, "aa") == 0 || strcmp(focus_s, "sharp") == 0) {
+            uint32_t fg = (uint32_t)(shp * 80.0f);
+            set_orbx_menu_toggle("gfx_film_grain", fg);
+        } else if (strcmp(focus_s, "exp") == 0 || strcmp(focus_s, "con") == 0) {
+            uint32_t pct = (uint32_t)(exp * con * 95.0f);
+            if (pct < 10u)  pct = 10u;
+            if (pct > 200u) pct = 200u;
+            trigger_orbx_menu_action(ORBX_ACT_SET_GFX_STRENGTH, (int32_t)pct, 0);
+        } else if (strcmp(focus_s, "sat") == 0) {
+            uint32_t pct = (uint32_t)(sat * 90.0f);
+            if (pct < 10u)  pct = 10u;
+            if (pct > 200u) pct = 200u;
+            trigger_orbx_menu_action(ORBX_ACT_SET_GFX_STRENGTH, (int32_t)pct, 0);
+        }
+    }
+    handle_api_shader_get(client_fd);
+}
+
+static void handle_api_depth_get(int client_fd) {
+    GnmDepthProbe dp = {0};
+    GnmCrashProbe gp = {0};
+    uint64_t flips = 0;
+    get_orbx_depth_probe(&dp);
+    get_orbx_gnm_probe(&gp, &flips);
+    char resp[768];
+    int len = snprintf(resp, sizeof(resp),
+        "{\"stage\":%u,\"depth_buffer_va\":\"0x%llX\",\"depth_width\":%u,\"depth_height\":%u,"
+        "\"depth_format\":%u,\"depth_samples\":%u,\"depth_hits\":%llu,\"ssao_mode\":%u,"
+        "\"ssao_intensity\":%.2f,\"ssao_radius\":%.2f,\"ssao_cp_strength\":%.2f,"
+        "\"ssr_intensity\":%.2f,\"ssr_distance\":%.1f,"
+        "\"gnm_stage\":%u,\"flips\":%llu,\"last_backbuffer_va\":\"0x%llX\",\"last_dcb_va\":\"0x%llX\",\"last_dcb_sz\":%u}",
+        dp.stage, (unsigned long long)dp.depth_buffer_va, dp.depth_width, dp.depth_height,
+        dp.depth_format, dp.depth_samples, (unsigned long long)dp.depth_hits, dp.ssao_mode,
+        dp.ssao_intensity, dp.ssao_radius, dp.ssao_cp_strength,
+        dp.ssr_intensity, dp.ssr_distance,
+        gp.stage, (unsigned long long)flips, (unsigned long long)gp.last_backbuffer_va,
+        (unsigned long long)gp.last_dcb_va, gp.last_dcb_total_sz);
+    send_http_response(client_fd, 200, "OK", "application/json", resp, len);
+}
+
+static void handle_api_depth_post(int client_fd, const char *url) {
+    char ssao_int_s[16] = {0}, ssao_cp_s[16] = {0}, ssr_int_s[16] = {0}, ssr_dist_s[16] = {0}, focus_s[16] = {0};
+    get_query_param(url, "ssao_int", ssao_int_s, sizeof(ssao_int_s));
+    get_query_param(url, "ssao_cp", ssao_cp_s, sizeof(ssao_cp_s));
+    get_query_param(url, "ssr_int", ssr_int_s, sizeof(ssr_int_s));
+    get_query_param(url, "ssr_dist", ssr_dist_s, sizeof(ssr_dist_s));
+    get_query_param(url, "focus", focus_s, sizeof(focus_s));
+
+    GnmDepthProbe dp = {0};
+    get_orbx_depth_probe(&dp);
+    float ssao_int = ssao_int_s[0]  ? (float)atof(ssao_int_s)  : (dp.ssao_intensity ? dp.ssao_intensity : 5.80f);
+    float ssao_cp  = ssao_cp_s[0]   ? (float)atof(ssao_cp_s)   : (dp.ssao_cp_strength ? dp.ssao_cp_strength : 0.78f);
+    float ssr_int  = ssr_int_s[0]   ? (float)atof(ssr_int_s)   : (dp.ssr_intensity ? dp.ssr_intensity : 2.45f);
+    float ssr_dist = ssr_dist_s[0]  ? (float)atof(ssr_dist_s)  : (dp.ssr_distance ? dp.ssr_distance : 500.0f);
+    set_orbx_depth_tunables(ssao_int, ssao_cp, ssr_int, ssr_dist);
+
+    /* Real-Time PC ENB Stacking Architecture:
+     * Does NOT replace the user's active ENB preset!
+     * When user adjusts SSAO or Contact Shadowing, stacks MODHEN_ENB_DARK_AO or MODHEN_ENB_ALL
+     * via _SET_EXTRA_TIMECYCLE_MODIFIER on top of whatever base preset is active (QuantV, NVE, etc.).
+     * Also tunes GTA V's native Cascade Shadow Maps (CSM_ST_SOFT16 + cascade bounds scale)
+     * so that buildings and structures cast deep, soft PC-quality shadows. */
+    if (ssao_int >= 1.2f || ssao_cp >= 0.25f) {
+        uint32_t extra_layer = (ssr_int > 3.0f) ? 3u : 1u; /* 1 = MODHEN_ENB_DARK_AO, 3 = MODHEN_ENB_ALL */
+        trigger_orbx_menu_action(ORBX_ACT_SET_ENB_EXTRA, (int32_t)extra_layer, 0);
+
+        /* bscale in tenths: e.g. ssao_int=5.8 -> bscale=29 (2.9x bounds scale) */
+        uint32_t bscale = (uint32_t)(ssao_int * 5.0f);
+        if (bscale < 15u) bscale = 15u;
+        if (bscale > 50u) bscale = 50u;
+        trigger_orbx_menu_action(ORBX_ACT_SET_SHADOW_QUALITY, 1, bscale);
+    } else {
+        trigger_orbx_menu_action(ORBX_ACT_SET_ENB_EXTRA, 0, 0);
+        trigger_orbx_menu_action(ORBX_ACT_SET_SHADOW_QUALITY, 0, 0);
+    }
+
+    handle_api_depth_get(client_fd);
+}
+
 static void handle_api_read(int client_fd, const char *url) {
     char path[512] = {0};
     get_query_param(url, "path", path, sizeof(path));
@@ -386,108 +692,217 @@ static void handle_api_read(int client_fd, const char *url) {
         return;
     }
     
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        send_http_response(client_fd, 500, "Server Error", "text/plain", "Seek failed", 11);
+        return;
+    }
     long fsize = ftell(f);
+    if (fsize < 0) {
+        fclose(f);
+        send_http_response(client_fd, 500, "Server Error", "text/plain", "Tell failed", 11);
+        return;
+    }
     fseek(f, 0, SEEK_SET);
+
+    struct timeval tv;
+    tv.tv_sec = 30;
+    tv.tv_usec = 0;
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     
-    char *buf = malloc(fsize + 1);
+    char *buf = malloc((size_t)fsize + 1);
     if (!buf) {
         fclose(f);
         send_http_response(client_fd, 500, "Server Error", "text/plain", "Out of memory", 13);
         return;
     }
     
-    fread(buf, 1, fsize, f);
+    size_t got = 0;
+    while (got < (size_t)fsize) {
+        size_t r = fread(buf + got, 1, (size_t)fsize - got, f);
+        if (r > 0) {
+            got += r;
+            continue;
+        }
+        if (ferror(f) && errno == EINTR) {
+            clearerr(f);
+            continue;
+        }
+        break;
+    }
     fclose(f);
-    buf[fsize] = '\0';
+    buf[got] = '\0';
     
-    send_http_response(client_fd, 200, "OK", "text/plain; charset=utf-8", buf, fsize);
+    send_http_response(client_fd, 200, "OK", "text/plain; charset=utf-8", buf, got);
     free(buf);
 }
 
-static void handle_api_write(int client_fd, const char *url, const char *body, size_t body_len) {
-    char path[512] = {0};
-    get_query_param(url, "path", path, sizeof(path));
-    if (path[0] == '\0') {
-        send_http_response(client_fd, 400, "Bad Request", "text/plain", "Missing path", 12);
-        return;
+static int fwrite_all(FILE *f, const char *data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        size_t w = fwrite(data + off, 1, len - off, f);
+        if (w > 0) {
+            off += w;
+            continue;
+        }
+        if (errno == EINTR) {
+            clearerr(f);
+            continue;
+        }
+        return -1;
     }
-    
-    mkdir_parents_for_file(path);
-    unlink(path);
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        rmdir(path);
-        f = fopen(path, "wb");
-    }
-    if (!f) {
-        send_http_response(client_fd, 500, "Error", "text/plain", "Cannot write file", 17);
-        return;
-    }
-    
-    if (body && body_len > 0) {
-        fwrite(body, 1, body_len, f);
-    }
-    fclose(f);
-    chmod(path, 0777);
-    
-    send_http_response(client_fd, 200, "OK", "application/json", "{\"status\":\"ok\"}", 15);
+    return 0;
 }
 
-static void handle_api_upload(int client_fd, const char *url, size_t content_length, const char *body, size_t body_len) {
+static void handle_api_stream_save(int client_fd, const char *url,
+                                   int has_content_length, size_t content_length,
+                                   const char *body, size_t body_len,
+                                   int reload_addon_on_dlc) {
     char path[512] = {0};
     get_query_param(url, "path", path, sizeof(path));
     if (path[0] == '\0') {
         send_http_response(client_fd, 400, "Bad Request", "text/plain", "Missing path", 12);
         return;
     }
-    
+
+    struct timeval tv;
+    tv.tv_sec = 30;
+    tv.tv_usec = 0;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     mkdir_parents_for_file(path);
-    
-    /* Cleanly unlink any existing file so replacing/overwriting never fails */
-    unlink(path);
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        rmdir(path);
-        f = fopen(path, "wb");
+
+    /* When GTA V is running with active nullfs mount over /data/orbx, avoid unlinking/replacing
+     * existing lower-layer inodes for small config writes (/api/write) to prevent FreeBSD nullfs vnode locks. */
+    struct stat existing_st;
+    int write_in_place = (!reload_addon_on_dlc && g_game_running && stat(path, &existing_st) == 0 && S_ISREG(existing_st.st_mode));
+
+    char tmp_path[528];
+    if (write_in_place) {
+        snprintf(tmp_path, sizeof(tmp_path), "%s", path);
+    } else {
+        snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+        unlink(tmp_path);
+    }
+    FILE *f = fopen(tmp_path, "wb");
+    if (!f && !write_in_place) {
+        rmdir(tmp_path);
+        f = fopen(tmp_path, "wb");
     }
     if (!f) {
         send_http_response(client_fd, 500, "Error", "text/plain", "Cannot create file", 18);
         return;
     }
-    
+
+    size_t expected = has_content_length ? content_length : body_len;
     size_t written = 0;
-    if (body && body_len > 0) {
-        fwrite(body, 1, body_len, f);
-        written += body_len;
+    int io_err = 0;
+
+    if (body && body_len > 0 && expected > 0) {
+        size_t to_write = (body_len > expected) ? expected : body_len;
+        if (fwrite_all(f, body, to_write) != 0) {
+            io_err = 1;
+        } else {
+            written += to_write;
+        }
     }
-    
-    char *stream_buf = malloc(BUFFER_SIZE);
-    if (!stream_buf) {
-        fclose(f);
-        send_http_response(client_fd, 500, "OOM", "text/plain", "OOM", 3);
+
+    if (!io_err && written < expected) {
+        char *stream_buf = malloc(BUFFER_SIZE);
+        if (!stream_buf) {
+            fclose(f);
+            unlink(tmp_path);
+            send_http_response(client_fd, 500, "OOM", "text/plain", "OOM", 3);
+            return;
+        }
+
+        int eagain_retries = 0;
+        while (written < expected) {
+            size_t to_read = expected - written;
+            if (to_read > BUFFER_SIZE) to_read = BUFFER_SIZE;
+            ssize_t r = read(client_fd, stream_buf, to_read);
+            if (r > 0) {
+                eagain_retries = 0;
+                if (fwrite_all(f, stream_buf, (size_t)r) != 0) {
+                    io_err = 1;
+                    break;
+                }
+                written += (size_t)r;
+                continue;
+            }
+            if (r < 0 && errno == EINTR) {
+                continue;
+            }
+            if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && eagain_retries < 1) {
+                eagain_retries++;
+                continue;
+            }
+            break;
+        }
+        free(stream_buf);
+    }
+
+    if (fflush(f) != 0) {
+        io_err = 1;
+    }
+    if (fclose(f) != 0) {
+        io_err = 1;
+    }
+
+    if (io_err) {
+        if (!write_in_place) unlink(tmp_path);
+        log_msg("[WEB] ERROR: Write failure saving '%s' (%zu/%zu bytes)\n",
+                path, written, expected);
+        send_http_response(client_fd, 500, "Server Error", "application/json",
+                           "{\"status\":\"error\",\"error\":\"write_failed\"}", 42);
         return;
     }
-    
-    while (written < content_length) {
-        size_t to_read = content_length - written;
-        if (to_read > BUFFER_SIZE) to_read = BUFFER_SIZE;
-        ssize_t n = read(client_fd, stream_buf, to_read);
-        if (n <= 0) break;
-        fwrite(stream_buf, 1, n, f);
-        written += n;
+
+    if (has_content_length && written != expected) {
+        if (!write_in_place) unlink(tmp_path);
+        log_msg("[WEB] ERROR: Truncated upload rejected for '%s' (%zu/%zu bytes)\n",
+                path, written, expected);
+        send_http_response(client_fd, 400, "Bad Request", "application/json",
+                           "{\"status\":\"error\",\"error\":\"truncated_upload\"}", 46);
+        return;
     }
-    
-    free(stream_buf);
-    fclose(f);
+
+    if (!write_in_place) {
+        if (rename(tmp_path, path) != 0) {
+            unlink(path);
+            rmdir(path);
+            if (rename(tmp_path, path) != 0) {
+                unlink(tmp_path);
+                log_msg("[WEB] ERROR: Rename failed saving '%s' (errno=%d)\n", path, errno);
+                send_http_response(client_fd, 500, "Server Error", "application/json",
+                                   "{\"status\":\"error\",\"error\":\"rename_failed\"}", 43);
+                return;
+            }
+        }
+    }
+
     chmod(path, 0777);
 
     /* If uploading a DLC pack, auto-reload addon cars so it shows in the in-game menu */
-    if (strstr(path, "/data/orbx/gta/rpf/dlc_addon/") != NULL) {
+    if (reload_addon_on_dlc && strstr(path, "/data/orbx/gta/rpf/dlc_addon/") != NULL) {
         reload_orbx_addon_cars();
     }
 
-    send_http_response(client_fd, 200, "OK", "application/json", "{\"status\":\"ok\"}", 15);
+    char ok_resp[128];
+    int ok_len = snprintf(ok_resp, sizeof(ok_resp),
+                          "{\"status\":\"ok\",\"bytes\":%zu}", written);
+    send_http_response(client_fd, 200, "OK", "application/json", ok_resp, (size_t)ok_len);
+}
+
+static void handle_api_write(int client_fd, const char *url, int has_content_length,
+                             size_t content_length, const char *body, size_t body_len) {
+    handle_api_stream_save(client_fd, url, has_content_length, content_length, body, body_len, 0);
+}
+
+static void handle_api_upload(int client_fd, const char *url, int has_content_length,
+                              size_t content_length, const char *body, size_t body_len) {
+    handle_api_stream_save(client_fd, url, has_content_length, content_length, body, body_len, 1);
 }
 
 static void handle_api_mkdir(int client_fd, const char *url) {
@@ -649,31 +1064,73 @@ static void *http_client_worker(void *arg) {
         return NULL;
     }
     
-    ssize_t n = read(client_fd, buf, BUFFER_SIZE - 1);
-    if (n <= 0) {
+    size_t total_read = 0;
+    char *header_end = NULL;
+    while (total_read < BUFFER_SIZE - 1) {
+        ssize_t r = read(client_fd, buf + total_read, (BUFFER_SIZE - 1) - total_read);
+        if (r > 0) {
+            total_read += (size_t)r;
+            buf[total_read] = '\0';
+            header_end = strstr(buf, "\r\n\r\n");
+            if (header_end) {
+                break;
+            }
+            continue;
+        }
+        if (r < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    if (total_read == 0) {
         free(buf);
         close(client_fd);
         return NULL;
     }
-    buf[n] = '\0';
+    buf[total_read] = '\0';
+    if (!header_end) {
+        header_end = strstr(buf, "\r\n\r\n");
+    }
     
     char method[16] = {0};
     char url[1024] = {0};
     sscanf(buf, "%15s %1023s", method, url);
     
-    char *header_end = strstr(buf, "\r\n\r\n");
     char *body = NULL;
     size_t body_len = 0;
     if (header_end) {
         body = header_end + 4;
-        body_len = n - (body - buf);
+        body_len = total_read - (size_t)(body - buf);
     }
     
+    int has_content_length = 0;
+    int is_chunked = 0;
     size_t content_length = 0;
-    char *cl_header = strstr(buf, "Content-Length:");
-    if (!cl_header) cl_header = strstr(buf, "content-length:");
-    if (cl_header) {
-        content_length = strtoul(cl_header + 15, NULL, 10);
+    if (header_end) {
+        const char *line = buf;
+        while (line < header_end) {
+            const char *eol = strstr(line, "\r\n");
+            if (!eol || eol > header_end) eol = header_end;
+            size_t line_len = (size_t)(eol - line);
+            if (line_len >= 15 && strncasecmp(line, "Content-Length:", 15) == 0) {
+                const char *valp = line + 15;
+                while (valp < eol && (*valp == ' ' || *valp == '\t')) valp++;
+                char *endp = NULL;
+                unsigned long long parsed = strtoull(valp, &endp, 10);
+                if (endp != valp) {
+                    content_length = (size_t)parsed;
+                    has_content_length = 1;
+                }
+            } else if (line_len >= 18 && strncasecmp(line, "Transfer-Encoding:", 18) == 0) {
+                const char *valp = line + 18;
+                while (valp < eol && (*valp == ' ' || *valp == '\t')) valp++;
+                if ((size_t)(eol - valp) >= 7 && strncasecmp(valp, "chunked", 7) == 0) {
+                    is_chunked = 1;
+                }
+            }
+            if (eol == header_end) break;
+            line = eol + 2;
+        }
     }
     
     if (strcmp(method, "OPTIONS") == 0) {
@@ -698,6 +1155,12 @@ static void *http_client_worker(void *arg) {
             close(client_fd);
             kill(getpid(), SIGTERM);
             return NULL;
+        } else if (strncmp(url, "/api/log/clear", 14) == 0) {
+            handle_api_log_clear(client_fd);
+        } else if (strncmp(url, "/api/shader", 11) == 0) {
+            handle_api_shader_get(client_fd);
+        } else if (strncmp(url, "/api/depth", 10) == 0) {
+            handle_api_depth_get(client_fd);
         } else if (strncmp(url, "/api/log", 8) == 0 || strncmp(url, "/log", 4) == 0) {
             FILE *lf = fopen(LOG_PATH, "rb");
             if (lf) {
@@ -727,18 +1190,28 @@ static void *http_client_worker(void *arg) {
             send_http_response(client_fd, 404, "Not Found", "text/plain", "Endpoint not found", 18);
         }
     } else if (strcmp(method, "POST") == 0) {
-        if (strncmp(url, "/api/write", 10) == 0) {
-            handle_api_write(client_fd, url, body, body_len);
+        if (!header_end) {
+            send_http_response(client_fd, 400, "Bad Request", "text/plain", "Incomplete HTTP headers", 23);
+        } else if (is_chunked && (strncmp(url, "/api/write", 10) == 0 || strncmp(url, "/api/upload", 11) == 0)) {
+            send_http_response(client_fd, 501, "Not Implemented", "text/plain", "Chunked transfer not supported", 30);
+        } else if (strncmp(url, "/api/write", 10) == 0) {
+            handle_api_write(client_fd, url, has_content_length, content_length, body, body_len);
         } else if (strncmp(url, "/api/upload", 11) == 0) {
-            handle_api_upload(client_fd, url, content_length, body, body_len);
+            handle_api_upload(client_fd, url, has_content_length, content_length, body, body_len);
         } else if (strncmp(url, "/api/mkdir", 10) == 0) {
             handle_api_mkdir(client_fd, url);
         } else if (strncmp(url, "/api/delete", 11) == 0) {
             handle_api_delete(client_fd, url);
         } else if (strncmp(url, "/api/add_dlc", 12) == 0) {
             handle_api_add_dlc(client_fd, url);
+        } else if (strncmp(url, "/api/log/clear", 14) == 0) {
+            handle_api_log_clear(client_fd);
         } else if (strncmp(url, "/api/config", 11) == 0) {
             handle_api_config_post(client_fd, url);
+        } else if (strncmp(url, "/api/shader", 11) == 0) {
+            handle_api_shader_post(client_fd, url);
+        } else if (strncmp(url, "/api/depth", 10) == 0) {
+            handle_api_depth_post(client_fd, url);
         } else if (strncmp(url, "/api/menu", 9) == 0) {
             handle_api_menu_post(client_fd, url);
         } else {
@@ -814,10 +1287,17 @@ static void *server_listener_thread(void *arg) {
         tv.tv_usec = 0;
         setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#ifdef SO_NOSIGPIPE
+        int nosig = 1;
+        setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &nosig, sizeof(nosig));
+#endif
 
         pthread_t client_th;
-        pthread_create(&client_th, NULL, http_client_worker, (void *)(intptr_t)client_fd);
-        pthread_detach(client_th);
+        if (pthread_create(&client_th, NULL, http_client_worker, (void *)(intptr_t)client_fd) == 0) {
+            pthread_detach(client_th);
+        } else {
+            close(client_fd);
+        }
     }
 
     return NULL;

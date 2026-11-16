@@ -3,483 +3,1903 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>modHEN: PS5 GTA V Mod & Plugin Manager</title>
+<title>modHEN Dashboard</title>
 <style>
   :root {
-    --bg-main: #0a0d14;
-    --bg-sidebar: #10141d;
-    --bg-card: #151a24;
-    --bg-card-hover: #1c2230;
-    --bg-input: #0d1118;
-    --border: #232a3b;
-    --border-hover: #37425c;
-    --text-main: #f0f3f8;
-    --text-muted: #848f9f;
-    --primary: #6366f1;
-    --primary-hover: #4f46e5;
-    --primary-glow: rgba(99, 102, 241, 0.25);
-    --accent: #10b981;
-    --danger: #f43f5e;
+    --bg: #0f131a;
+    --surface: #171c26;
+    --surface-hover: #1f2633;
+    --surface-alt: #12161f;
+    --border: #262f40;
+    --text: #f1f5f9;
+    --text-muted: #94a3b8;
+    --primary: #3b82f6;
+    --primary-hover: #2563eb;
+    --success: #10b981;
+    --danger: #ef4444;
     --warning: #f59e0b;
-    --radius-sm: 6px;
-    --radius-md: 10px;
+    --radius: 10px;
     --radius-lg: 14px;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-  body { background: var(--bg-main); color: var(--text-main); font-size: 13.5px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; -webkit-font-smoothing: antialiased; }
-  
-  /* Topbar */
-  .topbar { background: var(--bg-sidebar); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; z-index: 10; flex-shrink: 0; }
-  .logo-group { display: flex; align-items: center; gap: 12px; }
-  .logo-icon { width: 34px; height: 34px; background: linear-gradient(135deg, #6366f1, #a855f7); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 18px; box-shadow: 0 4px 12px var(--primary-glow); }
-  .logo-title { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; color: #fff; }
-  .logo-subtitle { font-size: 11px; color: var(--text-muted); }
-  .status-pill { display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; color: var(--accent); }
-  .pulse-dot { width: 7px; height: 7px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent); }
 
-  /* App Layout */
-  .app-layout { display: flex; flex: 1; overflow: hidden; }
-  
-  /* Sidebar */
-  .sidebar { width: 230px; background: var(--bg-sidebar); border-right: 1px solid var(--border); padding: 16px 12px; display: flex; flex-direction: column; gap: 20px; flex-shrink: 0; overflow-y: auto; }
-  .sidebar-section-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px; padding: 0 8px 6px; }
-  .nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-md); color: var(--text-muted); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
-  .nav-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--text-main); }
-  .nav-item.active { background: var(--primary-glow); color: #fff; font-weight: 600; }
-  .nav-item-icon { font-size: 15px; width: 18px; text-align: center; }
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
 
-  /* Main Workspace */
-  .main-workspace { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-main); }
-  .workspace-header { padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg-sidebar); display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; }
-  .breadcrumbs { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-muted); }
-  .crumb { color: var(--text-muted); cursor: pointer; padding: 3px 6px; border-radius: 4px; transition: all 0.1s; }
-  .crumb:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
-  .crumb.current { color: #fff; font-weight: 600; cursor: default; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
 
-  /* Toolbar */
-  .toolbar { display: flex; align-items: center; gap: 10px; }
-  .search-box { position: relative; width: 220px; }
-  .search-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border); padding: 7px 12px 7px 30px; border-radius: var(--radius-md); color: #fff; font-size: 12.5px; outline: none; transition: border-color 0.15s; }
-  .search-input:focus { border-color: var(--primary); }
-  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--text-muted); }
+  /* Top Navigation Bar */
+  .navbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+  }
 
-  /* Buttons */
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 7px 14px; border-radius: var(--radius-md); font-size: 12.5px; font-weight: 600; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; outline: none; white-space: nowrap; }
-  .btn-primary { background: var(--primary); color: #fff; box-shadow: 0 2px 8px var(--primary-glow); }
-  .btn-primary:hover { background: var(--primary-hover); }
-  .btn-secondary { background: var(--bg-card); border-color: var(--border); color: var(--text-main); }
-  .btn-secondary:hover { background: var(--bg-card-hover); border-color: var(--border-hover); }
-  .btn-danger { background: rgba(244, 63, 94, 0.1); border-color: rgba(244, 63, 94, 0.25); color: var(--danger); }
-  .btn-danger:hover { background: var(--danger); color: #fff; }
-  .btn-sm { padding: 4px 9px; font-size: 11.5px; border-radius: var(--radius-sm); }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
 
-  /* Content Scroll Area */
-  .content-area { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 18px; }
+  .brand-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 800;
+    color: #fff;
+  }
 
-  /* Dropzone */
-  .drop-card { border: 2px dashed var(--border); background: var(--bg-card); border-radius: var(--radius-lg); padding: 26px 20px; text-align: center; cursor: pointer; transition: all 0.2s; position: relative; }
-  .drop-card:hover, .drop-card.dragover { border-color: var(--primary); background: rgba(99, 102, 241, 0.05); }
-  .drop-icon { font-size: 28px; margin-bottom: 8px; }
-  .drop-title { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 4px; }
-  .drop-desc { font-size: 12px; color: var(--text-muted); }
-  
-  /* Upload Progress */
-  .upload-progress { margin-top: 14px; display: none; }
-  .progress-bar-bg { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
-  .progress-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: width 0.1s ease; }
-  .progress-status { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-muted); margin-top: 6px; }
+  .brand-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: -0.2px;
+  }
+
+  .brand-sub {
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+
+  /* Main Tabs */
+  .nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface-alt);
+    padding: 5px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.15s ease;
+  }
+
+  .tab-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .tab-btn.active {
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+  }
+
+  /* Status Pill */
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 99px;
+    font-size: 12px;
+    font-weight: 600;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--warning);
+    white-space: nowrap;
+  }
+
+  .status-badge.online {
+    background: rgba(16, 185, 129, 0.12);
+    border-color: rgba(16, 185, 129, 0.35);
+    color: var(--success);
+  }
+
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  /* Page Container */
+  .container {
+    max-width: 1180px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px;
+    flex: 1;
+  }
+
+  .tab-view {
+    display: none;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .tab-view.active {
+    display: flex;
+  }
+
+  /* Quick Summary Strip */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  /* Shortcut Bookmark Pills */
+  .shortcuts-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .shortcut-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+
+  .chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 7px 14px;
+    border-radius: 99px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s;
+  }
+
+  .chip:hover {
+    border-color: #475569;
+    color: #fff;
+    background: var(--surface-hover);
+  }
+
+  .chip.active {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--primary);
+    color: #60a5fa;
+  }
+
+  /* Card & Panel */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--surface-alt);
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-body {
+    padding: 20px;
+  }
+
+  /* Breadcrumbs & Path Bar */
+  .path-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 240px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    overflow-x: auto;
+  }
+
+  .crumb {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+
+  .crumb:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .crumb.current {
+    color: #fff;
+    font-weight: 700;
+  }
+
+  /* Buttons & Inputs */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: #fff;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .input:focus {
+    border-color: var(--primary);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-primary {
+    background: var(--primary);
+    color: #fff;
+  }
+
+  .btn-primary:hover {
+    background: var(--primary-hover);
+  }
+
+  .btn-secondary {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text);
+  }
+
+  .btn-secondary:hover {
+    background: var(--surface-hover);
+    border-color: #3b4963;
+  }
+
+  .btn-danger {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.3);
+    color: #f87171;
+  }
+
+  .btn-danger:hover {
+    background: var(--danger);
+    color: #fff;
+  }
+
+  .btn-sm {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 7px;
+  }
+
+  /* Compact Upload Bar */
+  .upload-banner {
+    border: 2px dashed var(--border);
+    background: rgba(59, 130, 246, 0.03);
+    border-radius: var(--radius-lg);
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    transition: all 0.15s;
+    cursor: pointer;
+  }
+
+  .upload-banner:hover, .upload-banner.dragover {
+    border-color: var(--primary);
+    background: rgba(59, 130, 246, 0.08);
+  }
+
+  .upload-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .upload-icon {
+    font-size: 24px;
+  }
+
+  .upload-title {
+    font-weight: 600;
+    color: #fff;
+    font-size: 13.5px;
+  }
+
+  .upload-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .upload-progress {
+    width: 100%;
+    display: none;
+    margin-top: 8px;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 99px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--primary), var(--success));
+    transition: width 0.1s;
+  }
+
+  .progress-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
 
   /* File Table */
-  .file-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
-  .table { width: 100%; border-collapse: collapse; text-align: left; }
-  .table th { background: rgba(0, 0, 0, 0.15); padding: 11px 16px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
-  .table td { padding: 12px 16px; border-bottom: 1px solid rgba(35, 42, 59, 0.5); font-size: 13px; }
-  .table tr:last-child td { border-bottom: none; }
-  .table tr:hover td { background: var(--bg-card-hover); }
-  .file-row-main { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-  .file-badge { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; font-family: monospace; }
-  .badge-folder { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+
+  .table th {
+    padding: 11px 18px;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.15);
+  }
+
+  .table td {
+    padding: 12px 18px;
+    border-bottom: 1px solid rgba(38, 47, 64, 0.6);
+    font-size: 13.5px;
+  }
+
+  .table tr:last-child td {
+    border-bottom: none;
+  }
+
+  .table tr:hover td {
+    background: var(--surface-hover);
+  }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+  }
+
+  .badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-family: monospace;
+    text-transform: uppercase;
+  }
+
+  .badge-dir { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
   .badge-rpf { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
-  .badge-prx { background: rgba(168, 85, 247, 0.15); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.3); }
-  .badge-meta { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-  .badge-file { background: rgba(139, 148, 158, 0.15); color: #9ca3af; }
-  .file-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+  .badge-cfg { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+  .badge-prx { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
+  .badge-file { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+
+  /* Two-Column Grid for Mod Menu & Settings */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 18px;
+  }
+
+  .toggle-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .toggle-btn {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    transition: all 0.15s;
+  }
+
+  .toggle-btn:hover {
+    border-color: #475569;
+  }
+
+  .toggle-btn.on {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: rgba(16, 185, 129, 0.45);
+  }
+
+  .pill-state {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: rgba(148, 163, 184, 0.15);
+    color: var(--text-muted);
+  }
+
+  .toggle-btn.on .pill-state {
+    background: var(--success);
+    color: #052e16;
+    font-weight: 800;
+  }
+
+  .action-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+
+  /* Settings Row */
+  .setting-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    cursor: pointer;
+  }
+
+  .setting-item input[type="checkbox"] {
+    width: 17px;
+    height: 17px;
+    margin-top: 2px;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+
+  .setting-title {
+    font-weight: 600;
+    color: #fff;
+    font-size: 13.5px;
+  }
+
+  .setting-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 3px;
+    line-height: 1.4;
+  }
 
   /* Modals */
-  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px); z-index: 999; align-items: center; justify-content: center; }
-  .modal-overlay.active { display: flex; }
-  .modal-box { background: var(--bg-card); border: 1px solid var(--border); width: 92%; max-width: 520px; border-radius: var(--radius-lg); box-shadow: 0 20px 40px rgba(0,0,0,0.5); overflow: hidden; animation: popIn 0.15s ease-out; }
-  .modal-box-lg { max-width: 780px; }
-  @keyframes popIn { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-  .modal-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
-  .modal-title { font-size: 15px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px; }
-  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
-  .modal-footer { padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-sidebar); display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-  .input-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; display: block; }
-  .modal-input { width: 100%; background: var(--bg-input); border: 1px solid var(--border); padding: 9px 12px; border-radius: var(--radius-md); color: #fff; font-size: 13px; outline: none; }
-  .modal-input:focus { border-color: var(--primary); }
-  .code-textarea { width: 100%; height: 380px; background: #080a0f; border: 1px solid var(--border); color: #e6edf3; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; padding: 12px; border-radius: var(--radius-md); resize: vertical; outline: none; line-height: 1.5; }
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: blur(3px);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
 
-  /* In-App Toasts */
-  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-  .toast { pointer-events: auto; background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--primary); padding: 12px 18px; border-radius: var(--radius-md); font-size: 13px; font-weight: 500; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,0.4); display: flex; align-items: center; gap: 10px; animation: slideIn 0.2s ease-out; }
-  .toast-success { border-left-color: var(--accent); }
+  .modal-overlay.active {
+    display: flex;
+  }
+
+  .modal-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: 480px;
+    overflow: hidden;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+  }
+
+  .modal-box.lg {
+    max-width: 780px;
+  }
+
+  .modal-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .modal-body {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .modal-footer {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-alt);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .code-editor {
+    width: 100%;
+    height: 400px;
+    background: #090c10;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    padding: 14px;
+    outline: none;
+    resize: vertical;
+    line-height: 1.5;
+  }
+
+  .log-box {
+    background: #090c10;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: #34d399;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    padding: 16px;
+    height: 480px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.55;
+  }
+
+  /* Toast */
+  .toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 300;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .toast {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--primary);
+    color: #fff;
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .toast-success { border-left-color: var(--success); }
   .toast-error { border-left-color: var(--danger); }
-  @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .toast-warning { border-left-color: var(--warning); }
+
+  /* Vehicle & Color Studio Styles */
+  .color-palette-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 10px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 8px;
+    background: rgba(10, 14, 23, 0.6);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .color-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    cursor: pointer;
+    transition: all 0.16s ease;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+    position: relative;
+  }
+  .color-card:hover {
+    border-color: var(--primary);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    background: var(--surface-hover);
+  }
+  .color-swatch-box {
+    width: 100%;
+    height: 38px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.22), 0 2px 4px rgba(0, 0, 0, 0.35);
+  }
+  .color-info {
+    text-align: center;
+    width: 100%;
+  }
+  .color-name {
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+  }
+  .color-badge {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+    display: block;
+  }
+  .studio-pills {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .part-btn-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(75px, 1fr));
+    gap: 6px;
+  }
+  .tuning-section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .tuning-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .tuning-box-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  @media (max-width: 768px) {
+    .navbar { height: auto; padding: 12px 16px; flex-wrap: wrap; }
+    .nav-tabs { order: 3; width: 100%; overflow-x: auto; }
+    .container { padding: 16px; }
+    .toggle-list { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 
-<!-- Topbar -->
-<header class="topbar">
-  <div class="logo-group">
-    <div class="logo-icon">🎮</div>
+<!-- Clean Top Navigation Bar -->
+<header class="navbar">
+  <div class="brand">
+    <div class="brand-logo">M</div>
     <div>
-      <div class="logo-title">modHEN: PS5 GTA V Mod & Plugin Manager</div>
-      <div class="logo-subtitle">Native SPRX/PRX Loader & AFR Engine</div>
+      <div class="brand-name">modHEN</div>
+      <div class="brand-sub">PS5 GTA V Mod &amp; Plugin Dashboard</div>
     </div>
   </div>
-  <div style="display: flex; gap: 12px; align-items: center;">
-    <button class="btn btn-secondary btn-sm" style="border-color: #3b82f6; color: #60a5fa; font-weight: 600; padding: 6px 14px;" onclick="openLogModal()">
-      <span>📋</span> Live Session Logs
+
+  <nav class="nav-tabs">
+    <button class="tab-btn active" id="tabBtnFiles" onclick="switchTab('files')">
+      <span>📁</span> Files &amp; Mods
     </button>
-    <div class="status-pill" id="gameStatusPill">
-      <span class="pulse-dot"></span>
-      <span id="gameStatusText">PS5 Native Loader (Port 8050)</span>
-    </div>
+    <button class="tab-btn" id="tabBtnMenu" onclick="switchTab('menu')">
+      <span>🎮</span> In-Game Menu
+    </button>
+    <button class="tab-btn" id="tabBtnVehicles" onclick="switchTab('vehicles')">
+      <span>🏎️</span> Vehicles &amp; Paint
+    </button>
+    <button class="tab-btn" id="tabBtnGraphics" onclick="switchTab('graphics')">
+      <span>✨</span> ENB &amp; ReShade
+    </button>
+    <button class="tab-btn" id="tabBtnSettings" onclick="switchTab('settings')">
+      <span>⚙️</span> Settings
+    </button>
+    <button class="tab-btn" id="tabBtnLogs" onclick="switchTab('logs')">
+      <span>📋</span> Live Logs
+    </button>
+  </nav>
+
+  <div class="status-badge" id="gameStatusPill">
+    <span class="status-dot"></span>
+    <span id="gameStatusText">Connecting...</span>
   </div>
 </header>
 
-<!-- Main App Layout -->
-<div class="app-layout">
-  
-  <!-- Sidebar Navigation -->
-  <aside class="sidebar">
-    <div>
-      <div class="sidebar-section-title">Plugins & Engine</div>
-      <div class="nav-item active" id="navPlugins" onclick="navigateTo('/data/modHEN/plugins')">
-        <span class="nav-item-icon">🧩</span>
-        <span>Plugins (HyperHEN)</span>
-      </div>
-      <div class="nav-item" id="navPluginsFallback" onclick="navigateTo('/data/plugins')">
-        <span class="nav-item-icon">🔌</span>
-        <span>Plugins (Fallback)</span>
-      </div>
+<!-- Main Content Container -->
+<main class="container">
 
-      <div class="sidebar-section-title" style="margin-top: 14px;">GTA V Mod Folders (AFR)</div>
-      <div class="nav-item" id="navRoot" onclick="navigateTo('/data/orbx/gta')">
-        <span class="nav-item-icon">📂</span>
-        <span>GTA Mod Root</span>
-      </div>
-      <div class="nav-item" id="navData" onclick="navigateTo('/data/orbx/gta/data')">
-        <span class="nav-item-icon">🎨</span>
-        <span>Data Overrides (ReVansV)</span>
-      </div>
-      <div class="nav-item" id="navDlc" onclick="navigateTo('/data/orbx/gta/rpf/dlc_addon')">
-        <span class="nav-item-icon">🏎️</span>
-        <span>DLC Add-on Packs</span>
-      </div>
-      <div class="nav-item" id="navRpf" onclick="navigateTo('/data/orbx/gta/rpf')">
-        <span class="nav-item-icon">📦</span>
-        <span>RPF Archives</span>
-      </div>
-      <div class="nav-item" id="navOrbxCfg" onclick="navigateTo('/data/orbx')">
-        <span class="nav-item-icon">🛠️</span>
-        <span>Orbx INI Config</span>
-      </div>
+  <!-- ==================== TAB 1: FILES & MODS ==================== -->
+  <section class="tab-view active" id="tab-files">
 
-      <div class="sidebar-section-title" style="margin-top: 14px;">PS5 Filesystem Explorer</div>
-      <div class="nav-item" id="navFsRoot" onclick="navigateTo('/')">
-        <span class="nav-item-icon">💽</span>
-        <span>Root Directory (/)</span>
-      </div>
-      <div class="nav-item" id="navDataRoot" onclick="navigateTo('/data')">
-        <span class="nav-item-icon">📁</span>
-        <span>/data (Storage)</span>
-      </div>
-      <div class="nav-item" id="navMntRoot" onclick="navigateTo('/mnt')">
-        <span class="nav-item-icon">📦</span>
-        <span>/mnt (Sandboxes & App0)</span>
-      </div>
+    <!-- Quick Folder Shortcuts -->
+    <div class="shortcuts-bar">
+      <span class="shortcut-label">Quick Folders:</span>
+      <button class="chip" data-path="/data/orbx/gta/rpf/dlc_addon" onclick="navigateTo('/data/orbx/gta/rpf/dlc_addon')">🏎️ DLC Add-Ons</button>
+      <button class="chip" data-path="/data/orbx/gta" onclick="navigateTo('/data/orbx/gta')">📂 GTA Mod Root</button>
+      <button class="chip" data-path="/data/orbx/gta/data" onclick="navigateTo('/data/orbx/gta/data')">🎨 Visual / Data</button>
+      <button class="chip active" data-path="/data/modHEN/plugins" onclick="navigateTo('/data/modHEN/plugins')">🧩 Plugins</button>
+      <button class="chip" data-path="/data/orbx" onclick="navigateTo('/data/orbx')">🛠️ Orbx Config</button>
+      <button class="chip" data-path="/data" onclick="navigateTo('/data')">💾 /data</button>
+      <button class="chip" data-path="/" onclick="navigateTo('/')">💽 PS5 Root (/)</button>
     </div>
 
-    <div>
-      <div class="sidebar-section-title">Mod Management</div>
-      <div class="nav-item" onclick="openModMenuModal()">
-        <span class="nav-item-icon">🎮</span>
-        <span>In-Game Mod Menu</span>
-      </div>
-      <div class="nav-item" onclick="openEngineModal()">
-        <span class="nav-item-icon">⚙️</span>
-        <span>Engine Settings</span>
-      </div>
-      <div class="nav-item" onclick="openQuickDlcModal()">
-        <span class="nav-item-icon">⚡</span>
-        <span>Quick Add DLC Mod</span>
-      </div>
-      <div class="nav-item" onclick="openDlcEditorModal()">
-        <span class="nav-item-icon">📝</span>
-        <span>Edit dlclist.xml</span>
-      </div>
-    </div>
-
-    <div style="margin-top: auto; padding: 12px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: var(--radius-md);">
-      <div style="font-size: 11px; font-weight: 700; color: #fff; margin-bottom: 4px;">🚀 Orbx Native Telemetry</div>
-      <div id="engineSidebarInfo" style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Native Orbx: Loading...<br>Legacy PRX: OFF</div>
-    </div>
-  </aside>
-
-  <!-- Workspace Area -->
-  <main class="main-workspace">
-    <!-- Header with Breadcrumbs & Actions -->
-    <div class="workspace-header" style="flex-wrap: wrap; gap: 10px;">
-      <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 320px;">
-        <div class="breadcrumbs" id="breadcrumbs" style="white-space: nowrap; overflow-x: auto;">Loading path...</div>
-        <div style="display: flex; align-items: center; gap: 4px; margin-left: auto;">
-          <input type="text" id="pathJumpInput" class="modal-input" style="padding: 4px 8px; font-size: 12px; font-family: monospace; width: 220px; height: 30px; margin: 0; background: rgba(0,0,0,0.3); border: 1px solid var(--border);" placeholder="Jump to /path..." onkeydown="if(event.key==='Enter') navigateTo(this.value)">
-          <button class="btn btn-secondary btn-sm" style="padding: 4px 10px; height: 30px;" onclick="navigateTo(document.getElementById('pathJumpInput').value)">Go</button>
+    <!-- Compact Upload Dropzone -->
+    <div class="upload-banner" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <input type="file" id="fileInput" style="display:none;" multiple onchange="handleFiles(this.files)">
+      <input type="file" id="folderInput" style="display:none;" webkitdirectory multiple onchange="handleFolderUpload(this.files)">
+      <div class="upload-info">
+        <div class="upload-icon">📤</div>
+        <div>
+          <div class="upload-title">Drag &amp; drop files or mod folders here to upload</div>
+          <div class="upload-sub">Uploads directly into the current folder shown below (overwrites existing files automatically)</div>
         </div>
       </div>
-      <div class="toolbar">
-        <div class="search-box">
-          <span class="search-icon">🔍</span>
-          <input type="text" class="search-input" id="filterInput" placeholder="Filter files..." oninput="filterFiles()">
+      <div class="toolbar" onclick="event.stopPropagation()">
+        <button class="btn btn-primary btn-sm" onclick="document.getElementById('fileInput').click()">📄 Select Files</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('folderInput').click()">📁 Upload Folder</button>
+      </div>
+      <div class="upload-progress" id="uploadProgress" onclick="event.stopPropagation()">
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-meta">
+          <span id="uploadStatusText">Uploading...</span>
+          <span id="uploadPct">0%</span>
         </div>
-        <button class="btn btn-secondary btn-sm" onclick="openNewFolderModal()">
-          <span>➕</span> New Folder
-        </button>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('folderInput').click()">
-          <span>📁</span> Upload Folder
-        </button>
-        <button class="btn btn-secondary btn-sm" style="border-color: #3b82f6; color: #60a5fa;" onclick="openLogModal()">
-          <span>📋</span> Live Logs
-        </button>
-        <button class="btn btn-primary btn-sm" onclick="openQuickDlcModal()">
-          <span>⚡</span> Add DLC Pack
-        </button>
-        <button class="btn btn-secondary btn-sm" onclick="refreshList()">
-          <span>🔄</span>
-        </button>
       </div>
     </div>
 
-    <!-- Scrollable Content -->
-    <div class="content-area">
-      <!-- Upload Dropzone -->
-      <div class="drop-card" id="dropZone" onclick="document.getElementById('fileInput').click()">
-        <input type="file" id="fileInput" style="display: none;" multiple onchange="handleFiles(this.files)">
-        <input type="file" id="folderInput" style="display: none;" webkitdirectory multiple onchange="handleFolderUpload(this.files)">
-        <div class="drop-icon">📤</div>
-        <div class="drop-title">Drop mod files or folders here to upload to this directory</div>
-        <div class="drop-desc">Supports dlc.rpf, loose .xml/.dat files, and whole mod folders (drag & drop or click Upload Folder)</div>
-        <div class="upload-progress" id="uploadProgress">
-          <div class="progress-bar-bg"><div class="progress-bar-fill" id="progressFill"></div></div>
-          <div class="progress-status">
-            <span id="uploadStatusText">Uploading...</span>
-            <span id="uploadPct">0%</span>
+    <!-- File Browser Card -->
+    <div class="card">
+      <div class="card-header">
+        <div class="path-bar" id="breadcrumbs">Loading...</div>
+        <div class="toolbar">
+          <input type="text" class="input" id="filterInput" placeholder="Search current folder..." style="width: 180px; padding: 6px 10px;" oninput="filterFiles()">
+          <button class="btn btn-primary btn-sm" onclick="openQuickDlcModal()">⚡ Quick Add DLC</button>
+          <button class="btn btn-secondary btn-sm" onclick="openFileEditor('/data/orbx/gta/dlclist.xml')">📝 dlclist.xml</button>
+          <button class="btn btn-secondary btn-sm" onclick="openNewFolderModal()">➕ New Folder</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshList()" title="Refresh folder">🔄</button>
+        </div>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th style="width: 120px;">Size</th>
+            <th style="width: 160px; text-align: right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="fileTableBody">
+          <tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:32px;">Loading files...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+
+
+  <!-- ==================== TAB 2: IN-GAME MOD MENU ==================== -->
+  <section class="tab-view" id="tab-menu">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🎮 GTA V Live Script Controller &amp; Trainer</div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span id="menuStatusBanner" style="font-size:12.5px; color:var(--text-muted);">Checking script hook...</span>
+          <button class="btn btn-danger btn-sm" onclick="sendMenuAction(27)">⛔ Reset All Mods</button>
+          <button class="btn btn-secondary btn-sm" onclick="refreshModMenuState()">🔄 Refresh</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="grid-2">
+          <!-- Player, Combat, Vehicle & World Toggles -->
+          <div>
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">
+              Trainer Cheats &amp; Toggles (Click to Toggle)
+            </div>
+            <div class="toggle-list" id="menuToggleGrid"></div>
+          </div>
+
+          <!-- Quick Actions, Clouds/POV, Keybinds & Spawner -->
+          <div style="display:flex; flex-direction:column; gap:16px;">
+            <div>
+              <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">
+                Instant Actions
+              </div>
+              <div class="action-grid">
+                <button class="btn btn-primary" onclick="switchTab('vehicles')">🎨 Paint &amp; Tuning Studio</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(1)">❤️ Heal &amp; Armor</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(2)">⭐ Clear Wanted</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(3)">🔫 All Weapons</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(4)">🔧 Repair Vehicle</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(21)">🏎️ Max LSC Mods</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(22)">🔑 Warp Nearest Car</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(6)">⚡ Boost Speed</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(8)">📍 TP Waypoint</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(20)">📷 Reset Cam</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(31)">⛽ Refuel Vehicle</button>
+                <button class="btn btn-secondary" onclick="sendMenuAction(24,2)">🧹 Clear Peds/Cars</button>
+              </div>
+            </div>
+
+            <!-- Sky, NVE Clouds & Camera POV Controls -->
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px;">
+              <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">
+                ☁️ NVE Clouds, Camera POV &amp; Physics
+              </div>
+              <div class="grid-2" style="gap:8px; margin-bottom:8px;">
+                <select class="input" id="menuCloudKeyframeSel" onchange="sendMenuAction(16, parseInt(this.value,10), 0)">
+                  <option value="-1">Keyframe: Weather Default</option>
+                  <option value="0">Keyframe: NVE Default</option>
+                  <option value="1">Sunny Clouds</option>
+                  <option value="2">Light Clouds</option>
+                  <option value="3">Medium Clouds</option>
+                  <option value="4">Overcast</option>
+                  <option value="5">Heavy Overcast</option>
+                  <option value="6">Contrails</option>
+                  <option value="7">Rain Clouds</option>
+                  <option value="8">Storm Clouds</option>
+                  <option value="9">Post-Rain</option>
+                  <option value="10">Foggy Sky</option>
+                  <option value="11">Smoggy Sky</option>
+                  <option value="12">Halloween</option>
+                  <option value="13">Snow Clouds</option>
+                </select>
+                <div style="display:flex; gap:6px;">
+                  <select class="input" id="menuCloudHatSel" style="flex:1;" onchange="if(this.value!=='') sendMenuAction(15, parseInt(this.value,10), 0)">
+                    <option value="">Load Cloud Hat...</option>
+                    <option value="0">Cloudy 01 (NVE)</option>
+                    <option value="1">Wispy (NVE)</option>
+                    <option value="2">Rain Clouds (NVE)</option>
+                    <option value="3">Horizon 1 (NVE)</option>
+                    <option value="4">Horizon 2 (NVE)</option>
+                    <option value="5">Stripey (NVE)</option>
+                    <option value="6">Clear Sky</option>
+                    <option value="7">Puffy White</option>
+                    <option value="8">Contrails</option>
+                    <option value="9">Horizon Mist</option>
+                    <option value="10">Horizon Band 3</option>
+                    <option value="11">Snow Clouds</option>
+                    <option value="12">Storm Clouds</option>
+                    <option value="13">Altostratus</option>
+                    <option value="14">Cirrocumulus</option>
+                    <option value="15">Stratocumulus</option>
+                  </select>
+                  <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(17)">Clear</button>
+                </div>
+              </div>
+              <div class="grid-2" style="gap:8px; margin-bottom:8px;">
+                <select class="input" id="menuPedViewSel" onchange="sendMenuAction(19, parseInt(this.value,10), 0)">
+                  <option value="0">On-Foot: Third Close</option>
+                  <option value="1">On-Foot: Third Medium</option>
+                  <option value="2">On-Foot: Third Far</option>
+                  <option value="3">On-Foot: First Person</option>
+                </select>
+                <select class="input" id="menuVehViewSel" onchange="sendMenuAction(19, 256 + parseInt(this.value,10), 0)">
+                  <option value="0">Vehicle: Third Close</option>
+                  <option value="1">Vehicle: Third Medium</option>
+                  <option value="2">Vehicle: Third Far</option>
+                  <option value="3">Vehicle: First / Cockpit</option>
+                </select>
+              </div>
+              <div class="grid-2" style="gap:8px;">
+                <select class="input" id="menuAfpModeSel" onchange="toggleMenuOpt('afp_mode', parseInt(this.value,10))">
+                  <option value="0">Camera: Stock GTA V</option>
+                  <option value="1">Camera: Alt First-Person</option>
+                  <option value="2">Camera: Tactical Bodycam</option>
+                  <option value="3">Camera: Shoulder GoPro</option>
+                  <option value="4">Camera: Dash Cam</option>
+                  <option value="5">Camera: Helmet Cam</option>
+                </select>
+                <select class="input" id="menuAfpFovSel" onchange="toggleMenuOpt('afp_fov_idx', parseInt(this.value,10))">
+                  <option value="0">AFP FOV: 75 deg</option>
+                  <option value="1">AFP FOV: 80 deg</option>
+                  <option value="2">AFP FOV: 85 deg</option>
+                  <option value="3">AFP FOV: 90 deg (Default)</option>
+                  <option value="4">AFP FOV: 95 deg</option>
+                  <option value="5">AFP FOV: 100 deg</option>
+                  <option value="6">AFP FOV: 105 deg</option>
+                  <option value="7">AFP FOV: 110 deg</option>
+                </select>
+              </div>
+              <div class="grid-2" style="gap:8px; margin-top:8px;">
+                <select class="input" id="menuAfpDriftSel" onchange="toggleMenuOpt('afp_smooth_follow', parseInt(this.value,10))">
+                  <option value="0">Bodycam Drift: OFF</option>
+                  <option value="1">Bodycam Drift: Subtle (0.50)</option>
+                  <option value="2">Bodycam Drift: Authentic (0.85)</option>
+                  <option value="3">Bodycam Drift: Heavy (0.92)</option>
+                </select>
+                <div style="display:flex; gap:6px;">
+                  <select class="input" id="menuTimeScaleSel" style="flex:1;" onchange="sendMenuAction(23, parseInt(this.value,10), 0)">
+                    <option value="0">Speed: 1.0x</option>
+                    <option value="1">Slow-Mo: 0.75x</option>
+                    <option value="2">Slow-Mo: 0.5x</option>
+                    <option value="3">Slow-Mo: 0.25x</option>
+                  </select>
+                  <select class="input" id="menuSpeedoSel" style="flex:1;" onchange="toggleMenuOpt('speedo_mode', parseInt(this.value,10))">
+                    <option value="0">Speedo: OFF</option>
+                    <option value="1">Forza 6: MPH</option>
+                    <option value="2">Forza 6: KPH</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Accessibility & Controller Keybinds -->
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <span style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">⌨️ Layout, Accessibility &amp; Keybinds</span>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(25)">Reset Keys</button>
+                  <button class="btn btn-primary btn-sm" onclick="sendMenuAction(26)">💾 Save INI</button>
+                </div>
+              </div>
+              <div class="grid-2" style="gap:8px; margin-bottom:8px;">
+                <select class="input" id="menuPosSel" onchange="toggleMenuOpt('menu_position', parseInt(this.value,10))">
+                  <option value="0">Position: Left</option>
+                  <option value="1">Position: Right</option>
+                  <option value="2">Position: Center</option>
+                </select>
+                <select class="input" id="menuScaleSel" onchange="toggleMenuOpt('menu_scale', parseInt(this.value,10))">
+                  <option value="0">Scale: Compact</option>
+                  <option value="1">Scale: Normal</option>
+                  <option value="2">Scale: Large</option>
+                </select>
+              </div>
+              <div class="grid-2" style="gap:8px; margin-bottom:8px;">
+                <label style="display:flex; align-items:center; gap:8px; font-size:12px;">
+                  <input type="checkbox" id="chkKeepSteering" onchange="toggleMenuOpt('keep_steering', this.checked?1:0)"> Keep Driving Open
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-size:12px;">
+                  <input type="checkbox" id="chkNavStick" onchange="toggleMenuOpt('nav_stick', this.checked?1:0)"> L-Stick Navigation
+                </label>
+              </div>
+              <div class="grid-2" style="gap:8px;">
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Open Menu Modifier</div>
+                  <select class="input" id="kbOpenMod" onchange="toggleMenuOpt('bind_open_mod', parseInt(this.value,10))"></select>
+                </div>
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Open Menu Button</div>
+                  <select class="input" id="kbOpenBtn" onchange="toggleMenuOpt('bind_open_btn', parseInt(this.value,10))"></select>
+                </div>
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Menu Confirm / Accept</div>
+                  <select class="input" id="kbAccept" onchange="toggleMenuOpt('bind_accept', parseInt(this.value,10))"></select>
+                </div>
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Menu Back / Cancel</div>
+                  <select class="input" id="kbCancel" onchange="toggleMenuOpt('bind_cancel', parseInt(this.value,10))"></select>
+                </div>
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Airbreak Hotkey</div>
+                  <select class="input" id="kbNoclip" onchange="toggleMenuOpt('bind_noclip', parseInt(this.value,10))"></select>
+                </div>
+                <div>
+                  <div style="font-size:11px; color:var(--text-muted); margin-bottom:4px;">Quick Repair Hotkey</div>
+                  <select class="input" id="kbQuickRepair" onchange="toggleMenuOpt('bind_quick_repair', parseInt(this.value,10))"></select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Vehicle Spawner -->
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                <span style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted);">Vehicle Spawner (DLC or Vanilla)</span>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn btn-secondary btn-sm" onclick="reloadAddonCars()">🔄 Reload Add-Ons</button>
+                  <button class="btn btn-secondary btn-sm" onclick="openFileEditor('/data/orbx/gta/addon_cars.txt')">📝 Edit List</button>
+                </div>
+              </div>
+              <div style="display:flex; gap:8px; margin-bottom:12px;">
+                <input type="text" class="input" id="addonCarName" placeholder="Enter model name (e.g. 27rev, r35, adder)" style="flex:1;" onkeydown="if(event.key==='Enter') spawnCustomCar(false)">
+                <button class="btn btn-primary" onclick="spawnCustomCar(false)">Spawn</button>
+                <button class="btn btn-secondary" onclick="spawnCustomCar(true)" title="Spawn and save to addon_cars.txt">Spawn + Save</button>
+              </div>
+              <div id="addonCarButtonList" style="display:flex; flex-wrap:wrap; gap:6px;">
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0x975CD9F6)">🏎️ Revuelto (27rev)</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xC593CAF5)">🏎️ GTR R35 (r35)</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xAC5DF515)">🏎️ Zentorno</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB779A091)">🏎️ Adder</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0x2F03547B)">🚁 Buzzard</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB39B0AE6)">✈️ Lazer</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== TAB 2.2: VEHICLES, PAINT & TUNING STUDIO ==================== -->
+  <section class="tab-view" id="tab-vehicles">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🏎️ Vehicle Paint &amp; Tuning Studio</div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="btn btn-primary btn-sm" onclick="sendMenuAction(4); showToast('🔧 Vehicle Repaired &amp; Cleaned', 'success');">🔧 Repair &amp; Wash</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(21); showToast('⚡ Max LSC Performance Installed', 'success');">⚡ Max All LSC</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(22); showToast('🔑 Warped into Nearest Vehicle', 'info');">🔑 Warp In Car</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(5); showToast('🔄 Vehicle Flipped Upright', 'info');">🔄 Flip Vehicle</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="grid-2">
+          <!-- Left: Paint Studio with Box Swatches & Variations -->
+          <div>
+            <div style="font-size:13px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">
+              🎨 Paint Studio &amp; Color Box Palette
+            </div>
+
+            <!-- Target Surface Selector -->
+            <div style="margin-bottom:12px;">
+              <div style="font-size:11.5px; font-weight:600; color:var(--text-muted); margin-bottom:6px;">Target Surface:</div>
+              <div class="studio-pills" id="colorTargetPills">
+                <button class="chip active" onclick="setColorTarget(0, this)">Both (Primary + Secondary)</button>
+                <button class="chip" onclick="setColorTarget(1, this)">Primary Paint</button>
+                <button class="chip" onclick="setColorTarget(2, this)">Secondary Paint</button>
+                <button class="chip" onclick="setColorTarget(3, this)">Pearlescent</button>
+                <button class="chip" onclick="setColorTarget(4, this)">Wheels Color</button>
+              </div>
+            </div>
+
+            <!-- Finish Variations Filter Tabs -->
+            <div style="margin-bottom:12px;">
+              <div style="font-size:11.5px; font-weight:600; color:var(--text-muted); margin-bottom:6px;">Finish Variation:</div>
+              <div class="studio-pills" id="colorCatPills">
+                <button class="chip active" onclick="filterColorCat(-1, this)">All (52)</button>
+                <button class="chip" onclick="filterColorCat(0, this)">Classic &amp; Metallic (20)</button>
+                <button class="chip" onclick="filterColorCat(1, this)">Matte Finishes (17)</button>
+                <button class="chip" onclick="filterColorCat(2, this)">Metals &amp; Chrome (7)</button>
+                <button class="chip" onclick="filterColorCat(3, this)">Pearlescent &amp; Specials (8)</button>
+              </div>
+            </div>
+
+            <!-- Search box -->
+            <div style="margin-bottom:12px; display:flex; gap:8px;">
+              <input type="text" class="input" id="colorSearchInput" placeholder="Quick search color (e.g. Red, Matte, Blue, Gold)..." oninput="renderColorPalette()" style="flex:1;">
+              <button class="btn btn-secondary btn-sm" onclick="document.getElementById('colorSearchInput').value=''; renderColorPalette();">Clear</button>
+            </div>
+
+            <!-- Color Swatches Grid (Boxes!) -->
+            <div class="color-palette-grid" id="colorPaletteContainer">
+              <!-- Rendered via JS -->
+            </div>
+
+            <!-- Window Tint Studio -->
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:12px; margin-top:16px;">
+              <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:8px;">
+                🕶️ Window Tint Darkness
+              </div>
+              <div class="studio-pills">
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 0); showToast('Window Tint: Stock / Clear');">Stock / Clear</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 1); showToast('Window Tint: Pure Black');">Pure Black</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 2); showToast('Window Tint: Dark Smoke');">Dark Smoke</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 3); showToast('Window Tint: Light Smoke');">Light Smoke</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 4); showToast('Window Tint: Stock Green');">Stock Green</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(38, 5); showToast('Window Tint: Limo Black');">Limo Black</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Body Parts Tuning & Powertrain -->
+          <div style="display:flex; flex-direction:column; gap:16px;">
+            <!-- Body Tuning Parts Customizer (Fixes X button / change parts) -->
+            <div class="tuning-box">
+              <div class="tuning-box-title">
+                <span>🔩</span> Body Tuning Parts &amp; Aero
+              </div>
+              <div style="font-size:12px; color:var(--text-muted);">
+                Select a body part, then click a part level or use the steppers to immediately install or remove stock.
+              </div>
+
+              <!-- Part Category Dropdown -->
+              <div style="display:flex; gap:8px; align-items:center;">
+                <label style="font-size:12px; font-weight:600; min-width:85px; color:var(--text-muted);">Body Part:</label>
+                <select class="input" id="tuningSlotSelect" onchange="onTuningSlotChanged()" style="flex:1;">
+                  <option value="0">Spoiler (Wing)</option>
+                  <option value="1">Front Bumper</option>
+                  <option value="2">Rear Bumper</option>
+                  <option value="3">Side Skirts</option>
+                  <option value="4">Exhaust System</option>
+                  <option value="5">Roll Cage &amp; Chassis</option>
+                  <option value="6">Front Grille</option>
+                  <option value="7">Hood / Bonnet</option>
+                  <option value="8">Left Fender</option>
+                  <option value="10">Roof &amp; Scoops</option>
+                  <option value="23">Front Wheels / Rims</option>
+                </select>
+              </div>
+
+              <!-- Quick Stepper & Install Controls -->
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <button class="btn btn-danger btn-sm" onclick="applySelectedBodyMod(-1)">↺ Revert to Stock</button>
+                <div style="display:flex; gap:6px;">
+                  <button class="btn btn-secondary btn-sm" onclick="stepSelectedBodyMod(-1)">◀ Prev Part</button>
+                  <button class="btn btn-secondary btn-sm" onclick="stepSelectedBodyMod(1)">Next Part ▶</button>
+                </div>
+              </div>
+
+              <!-- Part Index Grid (Stock, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10) -->
+              <div>
+                <div style="font-size:11.5px; font-weight:600; color:var(--text-muted); margin-bottom:6px;">Direct Part Select:</div>
+                <div class="part-btn-grid" id="bodyPartButtons">
+                  <!-- Rendered dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Powertrain, Suspension & Armor -->
+            <div class="tuning-box">
+              <div class="tuning-box-title">
+                <span>⚙️</span> Performance &amp; Handling Upgrades
+              </div>
+              <!-- Engine -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:12px; font-weight:600;">Engine EMS:</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(11, -1); showToast('Engine: Stock');">Stock</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(11, 0); showToast('Engine: Level 1');">L1</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(11, 1); showToast('Engine: Level 2');">L2</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(11, 2); showToast('Engine: Level 3');">L3</button>
+                  <button class="btn btn-primary btn-sm" onclick="applyLscMod(11, 3); showToast('Engine: Level 4 Max');">L4 Max</button>
+                </div>
+              </div>
+
+              <!-- Brakes -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:12px; font-weight:600;">Brake System:</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(12, -1); showToast('Brakes: Stock');">Stock</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(12, 0); showToast('Brakes: Street');">Street</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(12, 1); showToast('Brakes: Sport');">Sport</button>
+                  <button class="btn btn-primary btn-sm" onclick="applyLscMod(12, 2); showToast('Brakes: Race');">Race</button>
+                </div>
+              </div>
+
+              <!-- Transmission -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:12px; font-weight:600;">Transmission:</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(13, -1); showToast('Transmission: Stock');">Stock</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(13, 0); showToast('Transmission: Street');">Street</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(13, 1); showToast('Transmission: Sport');">Sport</button>
+                  <button class="btn btn-primary btn-sm" onclick="applyLscMod(13, 2); showToast('Transmission: Race');">Race</button>
+                </div>
+              </div>
+
+              <!-- Suspension -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:12px; font-weight:600;">Suspension:</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(15, -1); showToast('Suspension: Stock');">Stock</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(15, 0); showToast('Suspension: Lowered');">Lowered</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(15, 1); showToast('Suspension: Street');">Street</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(15, 2); showToast('Suspension: Sport');">Sport</button>
+                  <button class="btn btn-primary btn-sm" onclick="applyLscMod(15, 3); showToast('Suspension: Competition');">Comp</button>
+                </div>
+              </div>
+
+              <!-- Armor -->
+              <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:12px; font-weight:600;">Armor Plating:</span>
+                <div style="display:flex; gap:4px;">
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(16, -1); showToast('Armor: Stock');">Stock</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(16, 0); showToast('Armor: 20%');">20%</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(16, 1); showToast('Armor: 40%');">40%</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(16, 2); showToast('Armor: 60%');">60%</button>
+                  <button class="btn btn-secondary btn-sm" onclick="applyLscMod(16, 3); showToast('Armor: 80%');">80%</button>
+                  <button class="btn btn-primary btn-sm" onclick="applyLscMod(16, 4); showToast('Armor: 100%');">100%</button>
+                </div>
+              </div>
+
+              <!-- Turbo & Xenon Toggles -->
+              <div style="display:flex; gap:8px; margin-top:4px;">
+                <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="sendMenuAction(37, 18 | (1 << 16)); showToast('⚡ Turbo Tuning Toggled');">💨 Turbo Forced Induction</button>
+                <button class="btn btn-secondary btn-sm" style="flex:1;" onclick="sendMenuAction(37, 22 | (1 << 16)); showToast('💡 Xenon Headlights Toggled');">💡 Xenon Headlights</button>
+              </div>
+            </div>
+
+            <!-- Underglow Neon Tubes & Lighting -->
+            <div class="tuning-box">
+              <div class="tuning-box-title">
+                <span>💡</span> Underglow Neon &amp; Tire Smoke
+              </div>
+              <div class="studio-pills">
+                <button class="btn btn-secondary btn-sm" onclick="toggleMenuOpt('veh_neon_on', 1); showToast('All Neons ON');">All Neons ON</button>
+                <button class="btn btn-secondary btn-sm" onclick="toggleMenuOpt('veh_neon_on', 0); showToast('All Neons OFF');">All Neons OFF</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(33, 0); showToast('Front Neon Toggled');">Front Tube</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(33, 1); showToast('Back Neon Toggled');">Back Tube</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(33, 2); showToast('Left Neon Toggled');">Left Tube</button>
+                <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(33, 3); showToast('Right Neon Toggled');">Right Tube</button>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center; margin-top:4px;">
+                <span style="font-size:12px; font-weight:600; min-width:80px; color:var(--text-muted);">Neon Color:</span>
+                <select class="input" style="flex:1;" onchange="sendMenuAction(34, parseInt(this.value,10), 0); showToast('Neon Color Updated');">
+                  <option value="0">Pure White</option>
+                  <option value="1">Electric Blue</option>
+                  <option value="2">Mint Green</option>
+                  <option value="3">Lime Green</option>
+                  <option value="4">Golden Yellow</option>
+                  <option value="5">Sunset Orange</option>
+                  <option value="6">Hot Pink</option>
+                  <option value="7">Neon Purple</option>
+                  <option value="8">Blacklight UV</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== TAB 2.5: ENB & RESHADE STUDIO ==================== -->
+  <section class="tab-view" id="tab-graphics">
+    <!-- Non-Destructive Guarantee & Crash Probe Telemetry Strip -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">Overlay Mode</div>
+          <div class="stat-value" style="color:var(--success); font-size:14.5px;">100% Non-Destructive</div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Original NVE / weather timecycles untouched</div>
+        </div>
+        <span style="font-size:22px;">🛡️</span>
+      </div>
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">Active ENB / ReShade Filter</div>
+          <div class="stat-value" id="gfxActivePresetLabel">OFF (Original)</div>
+          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;" id="gfxActiveStrengthSub">Strength: 100% • Grain: OFF</div>
+        </div>
+        <span style="font-size:22px;">✨</span>
+      </div>
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">Crash Probe &amp; Native Health</div>
+          <div class="stat-value" id="probeHealthText">Waiting for game...</div>
+          <div style="font-size:11.5px; color:var(--text-muted); font-family:monospace; margin-top:2px;" id="probeBreadcrumbText">Last: NONE</div>
+        </div>
+        <span style="font-size:22px;">📡</span>
+      </div>
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">GNM Swapchain &amp; Flight Probe</div>
+          <div class="stat-value" id="gnmProbeStatus" style="font-size:14.5px;">Standby</div>
+          <div style="font-size:11.5px; color:var(--text-muted); font-family:monospace; margin-top:2px;" id="gnmProbeDetails">Buf: -- • DCBs: 0 (0 KB)</div>
+        </div>
+        <span style="font-size:22px;">🎮</span>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <!-- Left Column: Live ENB & ReShade Presets + Sliders -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">✨ Live ENB &amp; ReShade Presets</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-sm" onclick="copyConvertedXmlSnippet()">📋 Copy XML Snippet</button>
+            <button class="btn btn-danger btn-sm" onclick="sendMenuAction(12, -1, 0)">↺ Restore Original GFX</button>
+          </div>
+        </div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:16px;">
+          <!-- Sliders for Filter Intensity, Film Grain, Lens Post-FX -->
+          <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px; display:flex; flex-direction:column; gap:12px;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12.5px; font-weight:600; margin-bottom:6px;">
+                <span>Filter Intensity / Blend Strength</span>
+                <span id="gfxStrengthVal" style="color:var(--primary);">100%</span>
+              </div>
+              <input type="range" min="10" max="200" step="10" value="100" id="gfxStrengthSlider" style="width:100%; accent-color:var(--primary);" oninput="document.getElementById('gfxStrengthVal').textContent=this.value+'%'" onchange="setGfxStrength(this.value)">
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              <div>
+                <div style="display:flex; justify-content:space-between; font-size:12.5px; font-weight:600; margin-bottom:6px;">
+                  <span>ReShade Film Grain</span>
+                  <span id="gfxGrainVal" style="color:var(--text-muted);">0%</span>
+                </div>
+                <input type="range" min="0" max="100" step="10" value="0" id="gfxGrainSlider" style="width:100%; accent-color:var(--primary);" oninput="document.getElementById('gfxGrainVal').textContent=this.value+'%'" onchange="toggleMenuOpt('gfx_film_grain', this.value)">
+              </div>
+              <div>
+                <div style="font-size:12.5px; font-weight:600; margin-bottom:6px;">Lens Post-FX Overlay</div>
+                <select id="gfxPostFxSelect" class="input" style="width:100%; padding:6px 10px;" onchange="toggleMenuOpt('gfx_postfx_idx', this.value)">
+                  <option value="0">None (Off)</option>
+                  <option value="1">Cross-Process Lens</option>
+                  <option value="2">Heist Gold Tint</option>
+                  <option value="3">Chromatic Pulse</option>
+                  <option value="4">Soft Bloom Flash</option>
+                  <option value="5">High-Vis Contrast</option>
+                  <option value="6">Neon Dreamscape</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Preset Grid -->
+          <div>
+            <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">
+              Click Any Preset to Apply Instantly in GTA V
+            </div>
+            <div class="toggle-list" id="gfxPresetGrid"></div>
           </div>
         </div>
       </div>
 
-      <!-- File Table -->
-      <div class="file-card">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th style="width: 130px;">Size</th>
-              <th style="width: 180px; text-align: right;">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="fileTableBody">
-            <tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 30px;">Loading files from PS5...</td></tr>
-          </tbody>
-        </table>
+      <!-- Right Column: PC enbseries.ini / ReShade.ini Converter -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">🔄 PC ENB / ReShade (.ini) Converter</div>
+          <button class="btn btn-primary btn-sm" onclick="installConvertedIniToPs5()">⚡ Install to PS5 &amp; Activate</button>
+        </div>
+        <div class="card-body" style="display:flex; flex-direction:column; gap:14px;">
+          <div class="upload-banner" id="iniDropZone" onclick="document.getElementById('iniFileInput').click()" style="padding:14px 16px;">
+            <input type="file" id="iniFileInput" accept=".ini,.txt,.cfg" style="display:none;" onchange="handleIniFileSelect(this.files)">
+            <div class="upload-info">
+              <div class="upload-icon">🎨</div>
+              <div>
+                <div class="upload-title" id="iniFileNameLabel">Drop PC <code>enbseries.ini</code> or ReShade <code>.ini</code> here</div>
+                <div class="upload-sub">Automatically maps PC Bloom, Exposure, Vibrance, Technicolor &amp; SSAO to safe PS5 RAGE values</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Converted Parameter Fine-Tuner -->
+          <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px; display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>HDR Bloom Intensity</span><span id="convBloomLbl">0.58</span>
+              </div>
+              <input type="range" min="0.05" max="1.60" step="0.05" value="0.58" id="convBloom" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Exposure Bias</span><span id="convExpLbl">0.05</span>
+              </div>
+              <input type="range" min="-0.50" max="0.65" step="0.05" value="0.05" id="convExp" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Vibrance / Saturation</span><span id="convSatLbl">1.28</span>
+              </div>
+              <input type="range" min="0.60" max="1.70" step="0.05" value="1.28" id="convSat" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Bright Pass Threshold</span><span id="convThreshLbl">0.58</span>
+              </div>
+              <input type="range" min="0.30" max="1.30" step="0.05" value="0.58" id="convThresh" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Ambient Occlusion (SSAO)</span><span id="convSsaoLbl">2.40</span>
+              </div>
+              <input type="range" min="1.00" max="3.80" step="0.10" value="2.40" id="convSsao" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Lens Vignette</span><span id="convVigLbl">0.18</span>
+              </div>
+              <input type="range" min="0.00" max="0.65" step="0.02" value="0.18" id="convVig" style="width:100%;" oninput="updateConverterXmlPreview()">
+            </div>
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="font-size:12px; font-weight:600; color:var(--text-muted);">Generated RAGE <code>&lt;modifier name="MODHEN_CUSTOM_ENB"&gt;</code> XML</span>
+              <span style="font-size:11.5px; color:var(--success);">Clamped &amp; Crash-Safe</span>
+            </div>
+            <textarea class="code-editor" id="convertedXmlPreview" style="height:175px; font-size:11.5px;" readonly></textarea>
+          </div>
+        </div>
       </div>
     </div>
-  </main>
-</div>
 
-<!-- ================= MODALS (NO UGLY PROMPT/ALERT) ================= -->
+    <!-- Stage 1 Real-Time PSSL .sb Post-Processing Pipeline Card -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-header">
+        <div class="card-title">🔮 Stage 1 Real-Time PSSL Shader Studio (libSceGnmDriver) <span style="font-size:11px; font-weight:normal; color:#a78bfa; margin-left:8px; border:1px solid #7c3aed; padding:2px 8px; border-radius:10px; background:rgba(124,58,237,0.12);">PC ENB Stacking</span></div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="sbShaderBadge" class="badge" style="background:var(--bg); border:1px solid var(--border); font-size:11px; padding:3px 8px; border-radius:12px;">Checking...</span>
+          <button class="btn btn-secondary btn-sm" onclick="reloadShaderFile()">↺ Reload .sb</button>
+          <button class="btn btn-primary btn-sm" id="btnToggleShader" onclick="toggleShaderEngine()">⚡ Enable Shader</button>
+        </div>
+      </div>
+      <div class="card-body" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <!-- Left: Shader Status & File Upload -->
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px;">
+            <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:8px;">SHADER STAGE &amp; GPU PIPELINE STATUS</div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12.5px;">
+              <span>Target File:</span>
+              <code style="color:var(--primary);">/data/orbx/shaders/postprocess.sb</code>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12.5px;">
+              <span>Shader Architecture:</span>
+              <span id="sbShaderArch">AMD GCN CS_5_0 (Compute)</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12.5px;">
+              <span>GPU Microcode Staging:</span>
+              <span id="sbShaderGpuVa" style="font-family:monospace; color:var(--text-muted);">0x0 (Standby)</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12.5px;">
+              <span>Compute Dispatches:</span>
+              <span id="sbShaderDispatches" style="font-weight:600;">0</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+              <span>Safety Status:</span>
+              <span id="sbShaderStatus" style="color:var(--text-muted);">Standby (0 GPU writes)</span>
+            </div>
+          </div>
 
-<!-- 1. New Folder Modal -->
+          <div class="upload-banner" onclick="document.getElementById('sbFileInput').click()" style="padding:12px 14px;">
+            <input type="file" id="sbFileInput" accept=".sb,.bin" style="display:none;" onchange="uploadSbShader(this.files)">
+            <div class="upload-info">
+              <div class="upload-icon">⚡</div>
+              <div>
+                <div class="upload-title">Drop pre-compiled <code>postprocess.sb</code> here</div>
+                <div class="upload-sub">Uploads directly to <code>/data/orbx/shaders/postprocess.sb</code> with read-first header validation</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Live Tunable CB0 Constant Buffer Parameters -->
+        <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px; display:flex; flex-direction:column; gap:12px;">
+          <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:2px;">LIVE CB0 CONSTANT BUFFER CONTROLS</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Bloom Intensity</span><span id="sbBloomIntVal">0.35</span>
+              </div>
+              <input type="range" min="0.00" max="2.00" step="0.05" value="0.35" id="sbBloomIntSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('bin')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Bloom Threshold</span><span id="sbBloomThreshVal">0.85</span>
+              </div>
+              <input type="range" min="0.10" max="1.50" step="0.05" value="0.85" id="sbBloomThreshSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('bth')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Exposure (ACES)</span><span id="sbExpVal">1.00</span>
+              </div>
+              <input type="range" min="0.20" max="2.50" step="0.05" value="1.00" id="sbExpSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('exp')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Contrast</span><span id="sbConVal">1.05</span>
+              </div>
+              <input type="range" min="0.50" max="2.00" step="0.05" value="1.05" id="sbConSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('con')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Saturation</span><span id="sbSatVal">1.10</span>
+              </div>
+              <input type="range" min="0.00" max="2.00" step="0.05" value="1.10" id="sbSatSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('sat')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span>Vignette Strength</span><span id="sbVigVal">0.20</span>
+              </div>
+              <input type="range" min="0.00" max="1.00" step="0.05" value="0.20" id="sbVigSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('vig')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="Subpixel Edge Smoothing to eliminate distance pixelation and shimmering">Distance Anti-Aliasing (AA)</span><span id="sbAaVal">0.35</span>
+              </div>
+              <input type="range" min="0.00" max="1.00" step="0.05" value="0.35" id="sbAaSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('aa')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="Contrast-Adaptive Sharpening to keep textures crisp without ringing">CAS Sharpness</span><span id="sbSharpVal">0.20</span>
+              </div>
+              <input type="range" min="0.00" max="1.00" step="0.05" value="0.20" id="sbSharpSlider" style="width:100%; accent-color:var(--primary);" oninput="updateShaderTune('sharp')">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stage 2: Depth Buffer & Screen-Space Studio (SSAO / SSR) Card -->
+    <div class="card" style="margin-top:16px;">
+      <div class="card-header">
+        <div class="card-title">🌊 Stage 2: Deep Building Shadows &amp; SSAO Studio <span style="font-size:11px; font-weight:normal; color:#34d399; margin-left:8px; border:1px solid #059669; padding:2px 8px; border-radius:10px; background:rgba(5,150,105,0.12);">Additive Layer • Works With Any Preset</span></div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span id="depthStageBadge" class="badge" style="background:var(--bg); border:1px solid var(--border); font-size:11px; padding:3px 8px; border-radius:12px;">RAGE Depth Active</span>
+          <button class="btn btn-secondary btn-sm" onclick="fetchDepthTelemetry()">↺ Refresh Depth</button>
+        </div>
+      </div>
+      <div class="card-body" style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <!-- Left: Depth Buffer Hardware Telemetry -->
+        <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px; display:flex; flex-direction:column; gap:10px;">
+          <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:4px;">RAGE Z-BUFFER &amp; G-BUFFER HARDWARE PROBE</div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+            <span>Target Z-Buffer VA:</span>
+            <code id="depthGpuVa" style="color:var(--primary); font-weight:600;">0x203580000 (RAGE-Z)</code>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+            <span>Depth Resolution:</span>
+            <span id="depthRes">1920 × 1080 (1080p Native)</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+            <span>Depth Precision:</span>
+            <span id="depthFmt">32-Bit Float (Z32_FLOAT)</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+            <span>Depth Passes Detected:</span>
+            <span id="depthHits" style="font-weight:600; color:var(--success);">0</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:12.5px;">
+            <span>Occlusion Engine:</span>
+            <span id="depthSsaoMode" style="color:var(--primary); font-weight:600;">QuantV High-Precision SSAO</span>
+          </div>
+        </div>
+
+        <!-- Right: Screen-Space Ambient Occlusion (SSAO) & SSR Tunables -->
+        <div style="background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); padding:14px; display:flex; flex-direction:column; gap:12px;">
+          <div style="font-size:12px; font-weight:600; color:var(--text-muted); margin-bottom:2px;">LIVE SCREEN-SPACE AMBIENT OCCLUSION &amp; REFLECTIONS</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="Screen Space Ambient Occlusion &amp; Deep Building Shadow Darkness">SSAO &amp; Building Shadow Darkness</span><span id="depthSsaoIntVal">5.80x</span>
+              </div>
+              <input type="range" min="0.50" max="9.50" step="0.10" value="5.80" id="depthSsaoIntSlider" style="width:100%; accent-color:var(--primary);" oninput="updateDepthTune('ssao')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="Contact Shadowing under car wheels and crevices">Contact Point Shadowing</span><span id="depthSsaoCpVal">0.78</span>
+              </div>
+              <input type="range" min="0.10" max="1.50" step="0.05" value="0.78" id="depthSsaoCpSlider" style="width:100%; accent-color:var(--primary);" oninput="updateDepthTune('cp')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="HDR Glossy Reflection Sheen on car body and wet roads">SSR Reflection Sheen</span><span id="depthSsrIntVal">2.45x</span>
+              </div>
+              <input type="range" min="0.50" max="5.00" step="0.10" value="2.45" id="depthSsrIntSlider" style="width:100%; accent-color:var(--primary);" oninput="updateDepthTune('ssr')">
+            </div>
+            <div>
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px;">
+                <span title="Cascade Soft Shadow Scale &amp; Reflection Draw Distance">Cascade Soft Shadows &amp; Range</span><span id="depthSsrDistVal">500m</span>
+              </div>
+              <input type="range" min="50" max="1000" step="25" value="500" id="depthSsrDistSlider" style="width:100%; accent-color:var(--primary);" oninput="updateDepthTune('dist')">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  <!-- ==================== TAB 3: ENGINE SETTINGS ==================== -->
+  <section class="tab-view" id="tab-settings">
+    <div class="stats-row">
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">Orbx Native Engine</div>
+          <div class="stat-value" id="statNativeState">Loading...</div>
+        </div>
+        <span style="font-size:22px;">🚀</span>
+      </div>
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">Active Mod Files</div>
+          <div class="stat-value" id="statModCount">0</div>
+        </div>
+        <span style="font-size:22px;">📦</span>
+      </div>
+      <div class="stat-card">
+        <div>
+          <div class="stat-label">File Redirects</div>
+          <div class="stat-value" id="statRedirects">0</div>
+        </div>
+        <span style="font-size:22px;">🔀</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">⚙️ Engine &amp; Memory Configuration</div>
+        <button class="btn btn-primary btn-sm" onclick="saveEngineConfig()">💾 Save Settings</button>
+      </div>
+      <div class="card-body" style="display:flex; flex-direction:column; gap:12px;">
+        <label class="setting-item">
+          <input type="checkbox" id="cfgNativeOrbx" checked>
+          <div>
+            <div class="setting-title">Enable ModHEN Orbx Native File Redirection (Recommended)</div>
+            <div class="setting-desc">Redirects GTA V files from <code>/data/orbx/gta</code> natively on PS5 without XOM code-segment crashes.</div>
+          </div>
+        </label>
+
+        <div class="setting-item" style="flex-direction:column; cursor:default;">
+          <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; width:100%;">
+            <input type="checkbox" id="cfgHeapAdjuster">
+            <div>
+              <div class="setting-title">RAGE Heap Adjuster Compatibility Toggle (Safe Mode on PS5)</div>
+              <div class="setting-desc">PS5's 16 GB unified memory handles heavy add-on cars and NVE packs natively. Enabling this toggle is locked to a safe no-op on PS5 CUSA00419 so it will not corrupt render queues or cause black screens.</div>
+            </div>
+          </label>
+          <div style="display:flex; align-items:center; gap:16px; padding-left:29px; flex-wrap:wrap; margin-top:4px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:12.5px; color:var(--text-muted);">Reported Target Size:</span>
+              <select id="cfgHeapSizeMb" class="input" style="padding:5px 10px;">
+                <option value="1024">1024 MB (Safe Default)</option>
+                <option value="1536">1536 MB (Logged Only)</option>
+                <option value="2048">2048 MB (Logged Only)</option>
+              </select>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:var(--text-muted);">
+              <input type="checkbox" id="cfgHeapProbe" checked>
+              Enable Safe Heap Diagnostics Logging
+            </label>
+          </div>
+        </div>
+
+        <div class="setting-item" style="flex-direction:column; cursor:default;">
+          <label style="display:flex; align-items:flex-start; gap:12px; cursor:pointer; width:100%;">
+            <input type="checkbox" id="cfgLegacyPrx">
+            <div>
+              <div class="setting-title">Enable Optional Legacy .prx Slot</div>
+              <div class="setting-desc" style="color:var(--warning);">Keep OFF unless loading a PS5-compatible v1.00 PRX plugin from <code>/data/modHEN/plugins/</code>.</div>
+            </div>
+          </label>
+          <div style="padding-left:29px; width:100%; margin-top:4px;">
+            <input type="text" class="input" id="cfgLegacyPrxName" placeholder="Optional PRX filename (leave blank for auto-detect)" style="width:100%; max-width:420px;">
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  <!-- ==================== TAB 4: LIVE LOGS ==================== -->
+  <section class="tab-view" id="tab-logs">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📋 Live Session Logs</div>
+        <div class="toolbar">
+          <span id="logStatus" style="font-size:12px; color:var(--text-muted); margin-right:6px;">/api/log</span>
+          <label style="display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--text-muted); cursor:pointer; margin-right:6px;">
+            <input type="checkbox" id="autoRefreshLog" checked> Auto-Refresh
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="copyLogContent()">📋 Copy Logs</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearLogs()" title="Clear all payload & console logs">🗑️ Clear Logs</button>
+          <button class="btn btn-primary btn-sm" onclick="fetchLog()">🔄 Refresh</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <pre class="log-box" id="logTerminal">Loading live payload logs from PS5...</pre>
+      </div>
+    </div>
+  </section>
+
+
+
+</main>
+
+<!-- ==================== SIMPLE MODALS ==================== -->
+
+<!-- New Folder Modal -->
 <div class="modal-overlay" id="newFolderModal">
   <div class="modal-box">
     <div class="modal-header">
-      <div class="modal-title"><span>📁</span> Create New Folder</div>
+      <div class="card-title">📁 Create New Folder</div>
       <button class="btn btn-secondary btn-sm" onclick="closeModal('newFolderModal')">✕</button>
     </div>
     <div class="modal-body">
-      <div>
-        <label class="input-label">Folder Name</label>
-        <input type="text" class="modal-input" id="newFolderName" placeholder="e.g. nscout, DimzWeapons, cars" onkeydown="if(event.key==='Enter') submitNewFolder()">
-      </div>
+      <label style="font-size:12.5px; color:var(--text-muted); font-weight:600;">Folder Name</label>
+      <input type="text" class="input" id="newFolderName" placeholder="e.g. 27rev, my_mod" onkeydown="if(event.key==='Enter') submitNewFolder()">
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary btn-sm" onclick="closeModal('newFolderModal')">Cancel</button>
-      <button class="btn btn-primary btn-sm" onclick="submitNewFolder()">Create Folder</button>
+      <button class="btn btn-primary btn-sm" onclick="submitNewFolder()">Create</button>
     </div>
   </div>
 </div>
 
-<!-- 2. Delete Confirmation Modal -->
-<div class="modal-overlay" id="deleteModal">
-  <div class="modal-box">
-    <div class="modal-header">
-      <div class="modal-title" style="color: var(--danger);"><span>🗑️</span> Confirm Deletion</div>
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">✕</button>
-    </div>
-    <div class="modal-body">
-      <p style="font-size: 13.5px; line-height: 1.5;">Are you sure you want to permanently delete this item?</p>
-      <div style="background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: var(--radius-md); font-family: monospace; font-size: 12px; color: var(--danger); word-break: break-all;" id="deleteItemPath"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">Cancel</button>
-      <button class="btn btn-danger btn-sm" onclick="confirmDelete()">Yes, Delete</button>
-    </div>
-  </div>
-</div>
-
-<!-- 3. Quick Add DLC Modal -->
+<!-- Quick Add DLC Modal -->
 <div class="modal-overlay" id="quickDlcModal">
   <div class="modal-box">
     <div class="modal-header">
-      <div class="modal-title"><span>⚡</span> Quick Add DLC Mod</div>
+      <div class="card-title">⚡ Quick Add DLC Pack</div>
       <button class="btn btn-secondary btn-sm" onclick="closeModal('quickDlcModal')">✕</button>
     </div>
     <div class="modal-body">
-      <div>
-        <label class="input-label">Mod Folder Name (as placed in /rpf/dlc_addon/)</label>
-        <input type="text" class="modal-input" id="quickDlcModName" placeholder="e.g. nscout, DimzWeapons, s500w222" oninput="updateDlcPreview()">
-      </div>
-      <div>
-        <label class="input-label">Auto-Generated XML Entry</label>
-        <div style="background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: var(--radius-md); font-family: monospace; font-size: 12px; color: var(--accent); word-break: break-all;" id="quickDlcPreview">
-          &lt;Item&gt;/data/orbx/gta/rpf/dlc_addon/.../&lt;/Item&gt;
-        </div>
+      <label style="font-size:12.5px; color:var(--text-muted); font-weight:600;">DLC Folder Name (creates folder &amp; registers in dlclist.xml)</label>
+      <input type="text" class="input" id="quickDlcModName" placeholder="e.g. 27rev, r35, nscout" oninput="updateDlcPreview()" onkeydown="if(event.key==='Enter') submitQuickDlc()">
+      <div style="background:var(--bg); border:1px solid var(--border); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px; color:var(--success); word-break:break-all;" id="quickDlcPreview">
+        &lt;Item&gt;/data/orbx/gta/rpf/dlc_addon/.../&lt;/Item&gt;
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary btn-sm" onclick="closeModal('quickDlcModal')">Cancel</button>
-      <button class="btn btn-primary btn-sm" onclick="submitQuickDlc()">Save & Add to dlclist.xml</button>
+      <button class="btn btn-primary btn-sm" onclick="submitQuickDlc()">Add DLC Pack</button>
     </div>
   </div>
 </div>
 
-<!-- 4. Live Log Modal -->
-<div class="modal-overlay" id="logModal">
-  <div class="modal-box" style="max-width: 960px; width: 92%;">
+<!-- Delete Modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal-box">
     <div class="modal-header">
-      <div class="modal-title"><span>📋</span> GTA AFR Engine Live Session Log</div>
-      <div style="display: flex; gap: 10px; align-items: center;">
-        <label style="font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 5px; cursor: pointer;">
-          <input type="checkbox" id="autoRefreshLog" checked onchange="toggleAutoRefresh(this.checked)"> Auto-Refresh (2s)
-        </label>
-        <button class="btn btn-secondary btn-sm" onclick="copyLogContent()">Copy Log</button>
-        <button class="btn btn-secondary btn-sm" onclick="closeModal('logModal')">✕</button>
-      </div>
+      <div class="card-title" style="color:var(--danger);">🗑️ Confirm Delete</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">✕</button>
     </div>
-    <div class="modal-body" style="padding: 12px 20px;">
-      <pre id="logTerminal" style="background: #090d16; border: 1px solid var(--border); padding: 16px; border-radius: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #10b981; max-height: 520px; min-height: 260px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5;">Loading live payload logs from PS5...</pre>
+    <div class="modal-body">
+      <p style="font-size:13.5px; color:var(--text-muted);">Are you sure you want to permanently delete this item?</p>
+      <div style="background:var(--bg); border:1px solid var(--border); padding:10px; border-radius:var(--radius); font-family:monospace; font-size:12px; color:#f87171; word-break:break-all;" id="deleteItemPath"></div>
     </div>
-    <div class="modal-footer" style="justify-content: space-between;">
-      <span style="font-size: 11.5px; color: var(--text-muted);" id="logStatus">Endpoint: /api/log</span>
-      <button class="btn btn-secondary btn-sm" onclick="fetchLog()">Refresh Now</button>
+    <div class="modal-footer">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('deleteModal')">Cancel</button>
+      <button class="btn btn-danger btn-sm" onclick="confirmDelete()">Delete</button>
     </div>
   </div>
 </div>
 
-<!-- 4. Full dlclist.xml / File Editor Modal -->
+<!-- Text File Editor Modal -->
 <div class="modal-overlay" id="editorModal">
-  <div class="modal-box modal-box-lg">
+  <div class="modal-box lg">
     <div class="modal-header">
-      <div class="modal-title" id="editorModalTitle"><span>📝</span> Edit dlclist.xml</div>
+      <div class="card-title" id="editorModalTitle">📝 Edit File</div>
       <button class="btn btn-secondary btn-sm" onclick="closeModal('editorModal')">✕</button>
     </div>
     <div class="modal-body">
-      <textarea class="code-textarea" id="fileEditorTextarea" placeholder="Loading file content..."></textarea>
+      <textarea class="code-editor" id="fileEditorTextarea" placeholder="Loading file content..."></textarea>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary btn-sm" onclick="closeModal('editorModal')">Cancel</button>
-      <button class="btn btn-primary btn-sm" onclick="submitFileSave()">💾 Save File to PS5</button>
+      <button class="btn btn-primary btn-sm" onclick="submitFileSave()">💾 Save File</button>
     </div>
   </div>
 </div>
 
-<!-- 5. Engine Settings Modal -->
-<div class="modal-overlay" id="engineModal">
-  <div class="modal-box">
-    <div class="modal-header">
-      <div class="modal-title"><span>⚙️</span> Loader &amp; Engine Settings</div>
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('engineModal')">✕</button>
-    </div>
-    <div class="modal-body">
-      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:var(--radius-md);">
-        <input type="checkbox" id="cfgNativeOrbx" style="margin-top:3px;" checked>
-        <div>
-          <div style="font-weight:600; color:#fff;">Enable ModHEN Orbx Native (Recommended)</div>
-          <div style="font-size:11.5px; color:var(--text-muted); margin-top:2px;">Pure PS5 native FS redirection (/data/orbx/gta) with zero XOM code-segment faults.</div>
-        </div>
-      </label>
-      <label style="display:flex; align-items:flex-start; gap:10px; cursor:pointer; background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:var(--radius-md);">
-        <input type="checkbox" id="cfgLegacyPrx" style="margin-top:3px;">
-        <div>
-          <div style="font-weight:600; color:#fff;">Enable Legacy PS4 .prx Slot (Optional)</div>
-          <div style="font-size:11.5px; color:var(--warning); margin-top:2px;">Keep OFF unless loading a PS5-safe v1.00 mod menu .prx. Legacy PS4 orbx.prx crashes on FW 13.60 XOM.</div>
-        </div>
-      </label>
-      <div>
-        <label class="input-label">Optional Legacy .prx Filename in /data/modHEN/plugins/</label>
-        <input type="text" class="modal-input" id="cfgLegacyPrxName" placeholder="Leave blank for auto-detect (e.g. menu_v100.prx)">
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('engineModal')">Cancel</button>
-      <button class="btn btn-primary btn-sm" onclick="saveEngineConfig()">💾 Save Engine Settings</button>
-    </div>
-  </div>
-</div>
-
-<!-- In-Game Mod Menu Remote Control Modal -->
-<div class="modal-overlay" id="modMenuModal">
-  <div class="modal" style="max-width:560px;">
-    <div class="modal-header">
-      <h3 class="modal-title">🎮 modHEN In-Game Mod Menu (R1 + D-Pad Left)</h3>
-      <button class="btn-icon" onclick="closeModal('modMenuModal')">✕</button>
-    </div>
-    <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
-      <div id="menuStatusBanner" style="font-size:12px; padding:8px 12px; border-radius:var(--radius-md); background:var(--bg-input); border:1px solid var(--border); color:var(--text-muted);">Connecting to GTA V script hook...</div>
-      <div id="menuToggleGrid" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
-      <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Quick Actions & Vehicle Spawner</div>
-      <div style="display:flex; flex-wrap:wrap; gap:6px;">
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(1)">❤️ Heal + Armor</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(2)">⭐ Clear Wanted</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(3)">🔫 All Weapons</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(4)">🔧 Repair Car</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(6)">⚡ Boost Car</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(8)">📍 TP Waypoint</button>
-        <button class="btn btn-secondary btn-sm" style="border-color:#10b981; color:#34d399; font-weight:600;" onclick="sendMenuAction(11,0,0x975CD9F6)">🏎️ Revuelto (27rev)</button>
-        <button class="btn btn-secondary btn-sm" style="border-color:#10b981; color:#34d399; font-weight:600;" onclick="sendMenuAction(11,0,0xC593CAF5)">🏎️ GTR R35 (r35)</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xAC5DF515)">🏎️ Zentorno</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB779A091)">🏎️ Adder</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0x2F03547B)">🚁 Buzzard</button>
-        <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB39B0AE6)">✈️ Lazer</button>
-      </div>
-      <div style="font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase;">Spawn Add-On DLC Vehicle by Name (addon_cars.txt)</div>
-      <div style="display:flex; gap:6px; align-items:center;">
-        <input type="text" class="modal-input" id="addonCarName" placeholder="Model name (e.g. 27rev)" style="flex:1; margin:0;">
-        <button class="btn btn-primary btn-sm" onclick="spawnCustomCar(false)">Spawn</button>
-        <button class="btn btn-secondary btn-sm" onclick="spawnCustomCar(true)">Spawn + Save</button>
-        <button class="btn btn-secondary btn-sm" onclick="openFileEditor('/data/orbx/gta/addon_cars.txt')">📝 Edit List</button>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary btn-sm" onclick="closeModal('modMenuModal')">Close</button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
 <script>
@@ -487,6 +1907,189 @@ let currentPath = "/data/modHEN/plugins";
 let allFiles = [];
 let pendingDeletePath = "";
 let pendingEditPath = "";
+let activeTab = "files";
+
+function switchTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll('.tab-view').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + tab)?.classList.add('active');
+
+  document.getElementById('tabBtnFiles')?.classList.toggle('active', tab === 'files');
+  document.getElementById('tabBtnMenu')?.classList.toggle('active', tab === 'menu');
+  document.getElementById('tabBtnVehicles')?.classList.toggle('active', tab === 'vehicles');
+  document.getElementById('tabBtnGraphics')?.classList.toggle('active', tab === 'graphics');
+  document.getElementById('tabBtnSettings')?.classList.toggle('active', tab === 'settings');
+  document.getElementById('tabBtnLogs')?.classList.toggle('active', tab === 'logs');
+
+  if (tab === 'menu' || tab === 'graphics' || tab === 'vehicles') refreshModMenuState();
+  if (tab === 'vehicles') { renderColorPalette(); renderBodyPartButtons(); }
+  if (tab === 'settings') loadEngineConfig();
+  if (tab === 'logs') fetchLog();
+}
+
+/* ==================== VEHICLE PAINT & TUNING STUDIO ==================== */
+const VEH_COLOR_PRESETS = [
+  /* Classic & Metallic (cat: 0) */
+  { idx: 0, cat: 0, name: "Metallic Black", hex: "#0d1116", id: 0 },
+  { idx: 1, cat: 0, name: "Graphite", hex: "#32383d", id: 1 },
+  { idx: 2, cat: 0, name: "Dark Silver", hex: "#696e72", id: 3 },
+  { idx: 3, cat: 0, name: "Silver", hex: "#979a9c", id: 4 },
+  { idx: 4, cat: 0, name: "Ice White", hex: "#f0f0f0", id: 111 },
+  { idx: 5, cat: 0, name: "Formula Red", hex: "#c81010", id: 27 },
+  { idx: 6, cat: 0, name: "Torino Red", hex: "#a00a0a", id: 28 },
+  { idx: 7, cat: 0, name: "Sunset Orange", hex: "#f56414", id: 36 },
+  { idx: 8, cat: 0, name: "Bright Orange", hex: "#ff8200", id: 38 },
+  { idx: 9, cat: 0, name: "Racing Yellow", hex: "#ffd700", id: 88 },
+  { idx: 10, cat: 0, name: "Dew Yellow", hex: "#e6dc3c", id: 89 },
+  { idx: 11, cat: 0, name: "Bright Green", hex: "#0fa032", id: 53 },
+  { idx: 12, cat: 0, name: "Lime Green", hex: "#66cc33", id: 55 },
+  { idx: 13, cat: 0, name: "Dark Blue", hex: "#142441", id: 64 },
+  { idx: 14, cat: 0, name: "Diamond Blue", hex: "#d4ebf2", id: 67 },
+  { idx: 15, cat: 0, name: "Ultra Blue", hex: "#0066e6", id: 70 },
+  { idx: 16, cat: 0, name: "Racing Blue", hex: "#23528a", id: 73 },
+  { idx: 17, cat: 0, name: "Bright Purple", hex: "#8214b4", id: 145 },
+  { idx: 18, cat: 0, name: "Hot Pink", hex: "#ff3c96", id: 135 },
+  { idx: 19, cat: 0, name: "Salmon Pink", hex: "#f08282", id: 136 },
+
+  /* Matte Finishes (cat: 1) */
+  { idx: 20, cat: 1, name: "Matte Black", hex: "#141414", id: 12 },
+  { idx: 21, cat: 1, name: "Matte Gray", hex: "#3c3f41", id: 13 },
+  { idx: 22, cat: 1, name: "Matte Light Gray", hex: "#737678", id: 14 },
+  { idx: 23, cat: 1, name: "Matte White", hex: "#e6e6e6", id: 131 },
+  { idx: 24, cat: 1, name: "Matte Red", hex: "#aa1919", id: 39 },
+  { idx: 25, cat: 1, name: "Matte Dark Red", hex: "#731414", id: 40 },
+  { idx: 26, cat: 1, name: "Matte Orange", hex: "#f06e14", id: 41 },
+  { idx: 27, cat: 1, name: "Matte Yellow", hex: "#ffd21e", id: 42 },
+  { idx: 28, cat: 1, name: "Matte Lime", hex: "#64be28", id: 55 },
+  { idx: 29, cat: 1, name: "Matte Green", hex: "#1e552d", id: 128 },
+  { idx: 30, cat: 1, name: "Matte Forest", hex: "#233728", id: 151 },
+  { idx: 31, cat: 1, name: "Matte Olive", hex: "#41462d", id: 152 },
+  { idx: 32, cat: 1, name: "Matte Dark Blue", hex: "#192341", id: 82 },
+  { idx: 33, cat: 1, name: "Matte Blue", hex: "#28468c", id: 83 },
+  { idx: 34, cat: 1, name: "Matte Midnight", hex: "#12182d", id: 84 },
+  { idx: 35, cat: 1, name: "Matte Purple", hex: "#5a1e6e", id: 148 },
+  { idx: 36, cat: 1, name: "Matte Desert Tan", hex: "#918269", id: 153 },
+
+  /* Metals & Chrome (cat: 2) */
+  { idx: 37, cat: 2, name: "Chrome", hex: "#dce1e6", id: 120 },
+  { idx: 38, cat: 2, name: "Brushed Steel", hex: "#787d82", id: 117 },
+  { idx: 39, cat: 2, name: "Brushed BlackSteel", hex: "#373c41", id: 118 },
+  { idx: 40, cat: 2, name: "Brushed Aluminium", hex: "#a0a5aa", id: 119 },
+  { idx: 41, cat: 2, name: "Pure Gold", hex: "#e1b955", id: 158 },
+  { idx: 42, cat: 2, name: "Brushed Gold", hex: "#be9641", id: 159 },
+  { idx: 43, cat: 2, name: "Bronze Gold", hex: "#aa822d", id: 99 },
+
+  /* Pearlescent & Specials (cat: 3) */
+  { idx: 44, cat: 3, name: "Carbon Black", hex: "#1a1a1a", id: 147 },
+  { idx: 45, cat: 3, name: "Lava Red", hex: "#b42814", id: 150 },
+  { idx: 46, cat: 3, name: "Midnight Purple", hex: "#230a32", id: 142 },
+  { idx: 47, cat: 3, name: "Lime Green Pearl", hex: "#78dc14", id: 92 },
+  { idx: 48, cat: 3, name: "Ultra Blue Pearl", hex: "#0f4bb4", id: 62 },
+  { idx: 49, cat: 3, name: "Yellow Pearl", hex: "#ffe628", id: 91 },
+  { idx: 50, cat: 3, name: "Pink Pearl", hex: "#f564a0", id: 137 },
+  { idx: 51, cat: 3, name: "Diamond Pearl", hex: "#b4dcf0", id: 68 }
+];
+
+let g_colorTarget = 0;
+let g_colorCat = -1;
+let g_curTuningSlot = 0;
+let g_curPartIdx = -1;
+
+function setColorTarget(tgt, btn) {
+  g_colorTarget = tgt;
+  document.querySelectorAll('#colorTargetPills .chip').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+}
+
+function filterColorCat(cat, btn) {
+  g_colorCat = cat;
+  document.querySelectorAll('#colorCatPills .chip').forEach(el => el.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  renderColorPalette();
+}
+
+function renderColorPalette() {
+  const container = document.getElementById('colorPaletteContainer');
+  if (!container) return;
+  const search = (document.getElementById('colorSearchInput')?.value || '').toLowerCase().trim();
+  const catNames = ['Classic', 'Matte', 'Metal', 'Pearl'];
+  const catFilter = g_colorCat;
+
+  const filtered = VEH_COLOR_PRESETS.filter(c => {
+    if (catFilter >= 0 && c.cat !== catFilter) return false;
+    if (search && !c.name.toLowerCase().includes(search) && !catNames[c.cat].toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:30px; color:var(--text-muted);">No matching colors found</div>';
+    return;
+  }
+
+  container.innerHTML = filtered.map(c => `
+    <div class="color-card" onclick="applyVehicleColor(${c.idx})" title="Click to apply ${c.name} (${catNames[c.cat]})">
+      <div class="color-swatch-box" style="background:${c.hex};"></div>
+      <div class="color-info">
+        <span class="color-name">${c.name}</span>
+        <span class="color-badge">${catNames[c.cat]}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function applyVehicleColor(preset_idx) {
+  const p = VEH_COLOR_PRESETS[preset_idx];
+  if (!p) return;
+  const tgt = g_colorTarget;
+  const tgtNames = ['Both Surfaces', 'Primary Paint', 'Secondary Paint', 'Pearlescent', 'Wheels'];
+  const arg0 = (preset_idx & 0xffff) | ((tgt & 0xff) << 16);
+  sendMenuAction(7, arg0);
+  showToast(`🎨 Applied ${p.name} to ${tgtNames[tgt] || 'Vehicle'}`, 'success');
+}
+
+function applyLscMod(slot, lvl) {
+  const arg0 = (slot & 0xff) | ((lvl & 0xffff) << 16);
+  sendMenuAction(37, arg0);
+}
+
+function onTuningSlotChanged() {
+  const sel = document.getElementById('tuningSlotSelect');
+  if (!sel) return;
+  g_curTuningSlot = parseInt(sel.value, 10);
+  g_curPartIdx = -1;
+  renderBodyPartButtons();
+}
+
+function applySelectedBodyMod(lvl) {
+  g_curPartIdx = lvl;
+  applyLscMod(g_curTuningSlot, lvl);
+  renderBodyPartButtons();
+  const sel = document.getElementById('tuningSlotSelect');
+  const slotName = sel ? sel.options[sel.selectedIndex].text : 'Part';
+  if (lvl < 0) {
+    showToast(`↺ Restored ${slotName} to Stock`, 'info');
+  } else {
+    showToast(`Equipped ${slotName} (Part ${lvl + 1})`, 'success');
+  }
+}
+
+function stepSelectedBodyMod(dir) {
+  let nextLvl = g_curPartIdx + dir;
+  if (nextLvl < -1) nextLvl = 15;
+  if (nextLvl > 15) nextLvl = -1;
+  applySelectedBodyMod(nextLvl);
+}
+
+function renderBodyPartButtons() {
+  const box = document.getElementById('bodyPartButtons');
+  if (!box) return;
+  let html = `<button class="btn btn-sm ${g_curPartIdx === -1 ? 'btn-primary' : 'btn-secondary'}" onclick="applySelectedBodyMod(-1)">Stock</button>`;
+  for (let i = 0; i < 10; i++) {
+    const isAct = (g_curPartIdx === i);
+    html += `<button class="btn btn-sm ${isAct ? 'btn-primary' : 'btn-secondary'}" onclick="applySelectedBodyMod(${i})">Part ${i + 1}</button>`;
+  }
+  box.innerHTML = html;
+}
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
@@ -499,9 +2102,13 @@ function showToast(message, type = 'info') {
   const container = document.getElementById('toastContainer');
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span>${type === 'success' ? '✓' : (type === 'error' ? '✕' : 'ℹ')}</span><span>${message}</span>`;
+  const icon = type === 'success' ? '✓' : (type === 'error' ? '✕' : 'ℹ');
+  toast.innerHTML = `<span>${icon}</span><span>${message}</span>`;
   container.appendChild(toast);
-  setTimeout(() => { toast.style.opacity = '0'; toast.style.transform = 'translateY(10px)'; setTimeout(() => toast.remove(), 200); }, 3500);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 200);
+  }, 3200);
 }
 
 function openModal(id) { document.getElementById(id).classList.add('active'); }
@@ -510,21 +2117,10 @@ function closeModal(id) { document.getElementById(id).classList.remove('active')
 async function navigateTo(path) {
   if (!path) path = '/';
   currentPath = path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
-  
-  const jumpEl = document.getElementById('pathJumpInput');
-  if (jumpEl) jumpEl.value = currentPath;
 
-  // Update sidebar active highlights
-  document.getElementById('navPlugins')?.classList.toggle('active', currentPath === '/data/modHEN/plugins');
-  document.getElementById('navPluginsFallback')?.classList.toggle('active', currentPath === '/data/plugins');
-  document.getElementById('navRoot')?.classList.toggle('active', currentPath === '/data/orbx/gta');
-  document.getElementById('navData')?.classList.toggle('active', currentPath === '/data/orbx/gta/data');
-  document.getElementById('navDlc')?.classList.toggle('active', currentPath === '/data/orbx/gta/rpf/dlc_addon');
-  document.getElementById('navRpf')?.classList.toggle('active', currentPath === '/data/orbx/gta/rpf');
-  document.getElementById('navOrbxCfg')?.classList.toggle('active', currentPath === '/data/orbx');
-  document.getElementById('navFsRoot')?.classList.toggle('active', currentPath === '/');
-  document.getElementById('navDataRoot')?.classList.toggle('active', currentPath === '/data');
-  document.getElementById('navMntRoot')?.classList.toggle('active', currentPath === '/mnt');
+  document.querySelectorAll('.chip').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-path') === currentPath);
+  });
 
   updateBreadcrumbs();
   await loadFiles();
@@ -532,26 +2128,25 @@ async function navigateTo(path) {
 
 function updateBreadcrumbs() {
   const parts = currentPath.split('/').filter(Boolean);
-  let html = `<span class="crumb" onclick="navigateTo('/')">/</span>`;
+  let html = `<span class="crumb ${parts.length === 0 ? 'current' : ''}" onclick="navigateTo('/')">/ (Root)</span>`;
   let accum = '';
   parts.forEach((p, idx) => {
     accum += '/' + p;
     const isLast = idx === parts.length - 1;
-    html += ` <span style="opacity:0.4;">/</span> <span class="crumb ${isLast ? 'current' : ''}" onclick="navigateTo('${accum}')">${p}</span>`;
+    html += `<span style="color:var(--text-muted); opacity:0.5;">/</span><span class="crumb ${isLast ? 'current' : ''}" onclick="navigateTo('${accum}')">${p}</span>`;
   });
   document.getElementById('breadcrumbs').innerHTML = html;
 }
 
 async function loadFiles() {
   const tbody = document.getElementById('fileTableBody');
-  tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 24px;">Loading...</td></tr>`;
-
+  tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:28px;">Loading...</td></tr>`;
   try {
     const res = await fetch(`/api/list?path=${encodeURIComponent(currentPath)}`);
     allFiles = await res.json();
     renderFileList(allFiles);
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--danger); padding: 24px;">Error reading folder: ${err.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--danger); padding:28px;">Error reading folder: ${err.message}</td></tr>`;
   }
 }
 
@@ -560,43 +2155,49 @@ function renderFileList(files) {
   tbody.innerHTML = '';
 
   if (currentPath !== '/') {
-    let parent = currentPath.substring(0, currentPath.lastIndexOf('/'));
-    if (!parent) parent = '/';
+    let parent = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="3"><div class="file-row-main" onclick="navigateTo('${parent}')"><span class="file-badge badge-folder">DIR</span> <span style="font-weight:600; color:var(--text-muted);">.. (Parent Directory: ${parent})</span></div></td>`;
+    tr.innerHTML = `
+      <td colspan="3">
+        <div class="file-item" onclick="navigateTo('${parent}')">
+          <span class="badge badge-dir">UP</span>
+          <span style="color:var(--text-muted); font-weight:600;">.. (Back to ${parent})</span>
+        </div>
+      </td>`;
     tbody.appendChild(tr);
   }
 
   if (!files.length) {
-    tbody.innerHTML += `<tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 36px;">This folder is empty. Drag and drop mods or create a new folder!</td></tr>`;
+    tbody.innerHTML += `<tr><td colspan="3" style="text-align:center; color:var(--text-muted); padding:36px;">Folder is empty. Drag and drop files above or click New Folder.</td></tr>`;
     return;
   }
 
-  files.sort((a,b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
+  files.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
 
   files.forEach(f => {
     const tr = document.createElement('tr');
     const isDir = f.is_dir;
     const fullPath = (currentPath + '/' + f.name).replace(/\/+/g, '/');
-    
-    let badgeClass = 'badge-file', badgeText = 'FILE';
-    if (isDir) { badgeClass = 'badge-folder'; badgeText = 'DIR'; }
-    else if (f.name.endsWith('.rpf')) { badgeClass = 'badge-rpf'; badgeText = 'RPF'; }
-    else if (f.name.endsWith('.xml') || f.name.endsWith('.meta') || f.name.endsWith('.txt') || f.name.endsWith('.log') || f.name.endsWith('.dat') || f.name.endsWith('.ini')) { badgeClass = 'badge-meta'; badgeText = 'CFG'; }
 
-    const isEditable = !isDir && (f.name.endsWith('.xml') || f.name.endsWith('.meta') || f.name.endsWith('.txt') || f.name.endsWith('.log') || f.name.endsWith('.dat') || f.name.endsWith('.ini'));
+    let badgeClass = 'badge-file', badgeText = 'FILE';
+    if (isDir) { badgeClass = 'badge-dir'; badgeText = 'DIR'; }
+    else if (f.name.endsWith('.rpf')) { badgeClass = 'badge-rpf'; badgeText = 'RPF'; }
+    else if (f.name.endsWith('.prx') || f.name.endsWith('.sprx')) { badgeClass = 'badge-prx'; badgeText = 'PRX'; }
+    else if (/\.(xml|meta|txt|log|dat|ini|json)$/i.test(f.name)) { badgeClass = 'badge-cfg'; badgeText = 'CFG'; }
+
+    const isEditable = !isDir && /\.(xml|meta|txt|log|dat|ini|json)$/i.test(f.name);
     const clickFn = isDir ? `navigateTo('${fullPath}')` : (isEditable ? `openFileEditor('${fullPath}')` : '');
 
     tr.innerHTML = `
       <td>
-        <div class="file-row-main" onclick="${clickFn}">
-          <span class="file-badge ${badgeClass}">${badgeText}</span>
-          <span style="font-weight: 500;">${f.name}</span>
+        <div class="file-item" onclick="${clickFn}">
+          <span class="badge ${badgeClass}">${badgeText}</span>
+          <span style="font-weight:500;">${f.name}</span>
         </div>
       </td>
-      <td style="color: var(--text-muted); font-family: monospace;">${isDir ? '-' : formatBytes(f.size)}</td>
-      <td>
-        <div class="file-actions">
+      <td style="color:var(--text-muted); font-family:monospace; font-size:12.5px;">${isDir ? '—' : formatBytes(f.size)}</td>
+      <td style="text-align:right;">
+        <div style="display:inline-flex; gap:6px;">
           ${isEditable ? `<button class="btn btn-secondary btn-sm" onclick="openFileEditor('${fullPath}')">Edit</button>` : ''}
           <button class="btn btn-danger btn-sm" onclick="promptDelete('${fullPath}')">Delete</button>
         </div>
@@ -607,40 +2208,33 @@ function renderFileList(files) {
 }
 
 function filterFiles() {
-  const query = document.getElementById('filterInput').value.toLowerCase().trim();
-  const filtered = allFiles.filter(f => f.name.toLowerCase().includes(query));
-  renderFileList(filtered);
+  const q = document.getElementById('filterInput').value.toLowerCase().trim();
+  renderFileList(allFiles.filter(f => f.name.toLowerCase().includes(q)));
 }
 
 function refreshList() { loadFiles(); showToast('Folder refreshed', 'info'); }
 
-/* New Folder Modal Logic */
+/* Modals & File Operations */
 function openNewFolderModal() {
   document.getElementById('newFolderName').value = '';
   openModal('newFolderModal');
-  setTimeout(() => document.getElementById('newFolderName').focus(), 100);
+  setTimeout(() => document.getElementById('newFolderName').focus(), 80);
 }
 
 async function submitNewFolder() {
-  const name = document.getElementById('newFolderName').value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
-  if (!name) { showToast('Please enter a valid folder name', 'error'); return; }
-  
-  const targetPath = (currentPath + '/' + name).replace(/\/+/g, '/');
+  const name = document.getElementById('newFolderName').value.trim().replace(/[^a-zA-Z0-9_\-.]/g, '');
+  if (!name) { showToast('Enter a folder name', 'warning'); return; }
+  const target = (currentPath + '/' + name).replace(/\/+/g, '/');
   try {
-    const res = await fetch(`/api/mkdir?path=${encodeURIComponent(targetPath)}`, { method: 'POST' });
+    const res = await fetch(`/api/mkdir?path=${encodeURIComponent(target)}`, { method: 'POST' });
     if (res.ok) {
       closeModal('newFolderModal');
-      showToast(`Folder "${name}" created successfully`, 'success');
+      showToast(`Created folder "${name}"`, 'success');
       loadFiles();
-    } else {
-      showToast('Failed to create folder', 'error');
-    }
-  } catch (e) {
-    showToast('Network error creating folder', 'error');
-  }
+    } else showToast('Failed to create folder', 'error');
+  } catch (e) { showToast('Network error', 'error'); }
 }
 
-/* Delete Modal Logic */
 function promptDelete(path) {
   pendingDeletePath = path;
   document.getElementById('deleteItemPath').textContent = path;
@@ -655,20 +2249,15 @@ async function confirmDelete() {
       closeModal('deleteModal');
       showToast(`Deleted ${pendingDeletePath.split('/').pop()}`, 'success');
       loadFiles();
-    } else {
-      showToast('Delete failed', 'error');
-    }
-  } catch (e) {
-    showToast('Network error during delete', 'error');
-  }
+    } else showToast('Delete failed', 'error');
+  } catch (e) { showToast('Network error', 'error'); }
 }
 
-/* Quick Add DLC Modal Logic */
 function openQuickDlcModal() {
   document.getElementById('quickDlcModName').value = '';
   updateDlcPreview();
   openModal('quickDlcModal');
-  setTimeout(() => document.getElementById('quickDlcModName').focus(), 100);
+  setTimeout(() => document.getElementById('quickDlcModName').focus(), 80);
 }
 
 function updateDlcPreview() {
@@ -680,46 +2269,33 @@ function updateDlcPreview() {
 
 async function submitQuickDlc() {
   const name = document.getElementById('quickDlcModName').value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
-  if (!name) { showToast('Please enter a mod name', 'error'); return; }
-
+  if (!name) { showToast('Enter a DLC folder name', 'warning'); return; }
   try {
     const res = await fetch(`/api/add_dlc?name=${encodeURIComponent(name)}`, { method: 'POST' });
     if (res.ok) {
       closeModal('quickDlcModal');
-      showToast(`Added ${name} to dlclist.xml and prepared folder!`, 'success');
-      loadFiles();
-    } else {
-      showToast('Failed to update dlclist.xml', 'error');
-    }
-  } catch (e) {
-    showToast('Error communicating with PS5', 'error');
-  }
-}
-
-/* File Editor Modal Logic */
-function openDlcEditorModal() {
-  openFileEditor('/data/orbx/gta/dlclist.xml');
+      showToast(`Added "${name}" to dlclist.xml & created folder!`, 'success');
+      navigateTo(`/data/orbx/gta/rpf/dlc_addon/${name}`);
+    } else showToast('Failed to add DLC', 'error');
+  } catch (e) { showToast('Network error', 'error'); }
 }
 
 async function openFileEditor(path) {
   pendingEditPath = path;
-  document.getElementById('editorModalTitle').innerHTML = `<span>📝</span> Edit ${path.split('/').pop()}`;
-  document.getElementById('fileEditorTextarea').value = 'Loading file...';
+  document.getElementById('editorModalTitle').textContent = '📝 Edit ' + path.split('/').pop();
+  document.getElementById('fileEditorTextarea').value = 'Loading...';
   openModal('editorModal');
-
   try {
     const res = await fetch(`/api/read?path=${encodeURIComponent(path)}`);
-    const text = await res.text();
-    document.getElementById('fileEditorTextarea').value = text;
+    document.getElementById('fileEditorTextarea').value = res.ok ? await res.text() : '';
   } catch (e) {
-    document.getElementById('fileEditorTextarea').value = 'Error reading file: ' + e.message;
+    document.getElementById('fileEditorTextarea').value = '';
   }
 }
 
 async function submitFileSave() {
   if (!pendingEditPath) return;
   const content = document.getElementById('fileEditorTextarea').value;
-
   try {
     const res = await fetch(`/api/write?path=${encodeURIComponent(pendingEditPath)}`, {
       method: 'POST',
@@ -727,20 +2303,16 @@ async function submitFileSave() {
     });
     if (res.ok) {
       closeModal('editorModal');
-      showToast(`Saved ${pendingEditPath.split('/').pop()} successfully!`, 'success');
+      showToast(`Saved ${pendingEditPath.split('/').pop()}`, 'success');
       loadFiles();
-    } else {
-      showToast('Save failed', 'error');
-    }
-  } catch (e) {
-    showToast('Error saving file', 'error');
-  }
+    } else showToast('Save failed', 'error');
+  } catch (e) { showToast('Network error', 'error'); }
 }
 
-/* Drag & Drop and Folder Uploading */
+/* Upload Drag & Drop */
 const dropZone = document.getElementById('dropZone');
-['dragenter', 'dragover'].forEach(n => dropZone.addEventListener(n, e => { e.preventDefault(); dropZone.classList.add('dragover'); }));
-['dragleave', 'drop'].forEach(n => dropZone.addEventListener(n, e => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+['dragenter', 'dragover'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+['dragleave', 'drop'].forEach(ev => dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
 
 dropZone.addEventListener('drop', async e => {
   e.preventDefault();
@@ -748,18 +2320,16 @@ dropZone.addEventListener('drop', async e => {
   const items = e.dataTransfer.items;
   if (items && items.length > 0 && items[0].webkitGetAsEntry) {
     const list = [];
-    async function traverse(entry, p) {
+    async function traverse(entry, prefix) {
       if (entry.isFile) {
         const file = await new Promise((res, rej) => entry.file(res, rej));
-        list.push({ file, relPath: p + entry.name });
+        list.push({ file, relPath: prefix + entry.name });
       } else if (entry.isDirectory) {
         const reader = entry.createReader();
         while (true) {
           const entries = await new Promise((res, rej) => reader.readEntries(res, rej));
-          if (!entries || entries.length === 0) break;
-          for (const sub of entries) {
-            await traverse(sub, p + entry.name + '/');
-          }
+          if (!entries || !entries.length) break;
+          for (const sub of entries) await traverse(sub, prefix + entry.name + '/');
         }
       }
     }
@@ -784,16 +2354,11 @@ async function uploadFileList(items) {
   progressBox.style.display = 'block';
 
   const basePath = (currentPath === '/') ? '' : currentPath;
-  let replacedCount = 0;
-
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const cleanRel = item.relPath.replace(/^\/+/, '');
     const fullUploadPath = basePath + '/' + cleanRel;
-    const isReplacing = allFiles.some(f => f.name === cleanRel || cleanRel.startsWith(f.name + '/'));
-    if (isReplacing) replacedCount++;
-
-    status.textContent = `Uploading [${i+1}/${items.length}]: ${cleanRel}${isReplacing ? ' (Replacing)' : ''}`;
+    status.textContent = `Uploading (${i + 1}/${items.length}): ${cleanRel}`;
     fill.style.width = '0%';
     pctText.textContent = '0%';
 
@@ -809,8 +2374,8 @@ async function uploadFileList(items) {
             pctText.textContent = pct + '%';
           }
         };
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(xhr.statusText || ('HTTP ' + xhr.status)));
-        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error('HTTP ' + xhr.status));
+        xhr.onerror = () => reject(new Error('Network error'));
         xhr.send(item.file);
       });
     } catch (e) {
@@ -818,125 +2383,112 @@ async function uploadFileList(items) {
     }
   }
 
-  const msg = replacedCount > 0 
-    ? `Uploaded ${items.length} file(s) (${replacedCount} replaced/overwritten)!`
-    : `Successfully uploaded ${items.length} file(s)!`;
-  status.textContent = msg;
-  showToast(msg, 'success');
+  status.textContent = `Uploaded ${items.length} file(s)!`;
+  showToast(`Uploaded ${items.length} file(s) successfully!`, 'success');
   setTimeout(() => { progressBox.style.display = 'none'; }, 2000);
   loadFiles();
 }
 
-async function handleFolderUpload(files) {
+function handleFolderUpload(files) {
   if (!files || !files.length) return;
   const list = [];
   for (let i = 0; i < files.length; i++) {
-    let rel = files[i].webkitRelativePath || files[i].name;
-    rel = rel.replace(/^\/+/, '');
-    if (!rel) continue;
-    list.push({ file: files[i], relPath: rel });
+    const rel = (files[i].webkitRelativePath || files[i].name).replace(/^\/+/, '');
+    if (rel) list.push({ file: files[i], relPath: rel });
   }
-  await uploadFileList(list);
+  uploadFileList(list);
 }
 
-async function handleFiles(files) {
+function handleFiles(files) {
   if (!files || !files.length) return;
   const list = [];
-  for (let i = 0; i < files.length; i++) {
-    list.push({ file: files[i], relPath: files[i].name });
-  }
-  await uploadFileList(list);
+  for (let i = 0; i < files.length; i++) list.push({ file: files[i], relPath: files[i].name });
+  uploadFileList(list);
 }
 
-// ================= LIVE LOG VIEWER =================
-let logInterval = null;
-
-function openLogModal() {
-  openModal('logModal');
-  fetchLog();
-  if (document.getElementById('autoRefreshLog').checked) {
-    startLogTimer();
-  }
-}
-
-function startLogTimer() {
-  stopLogTimer();
-  logInterval = setInterval(fetchLog, 1000);
-}
-
-function stopLogTimer() {
-  if (logInterval) {
-    clearInterval(logInterval);
-    logInterval = null;
-  }
-}
-
-function toggleAutoRefresh(enabled) {
-  if (enabled) startLogTimer();
-  else stopLogTimer();
-}
-
-async function fetchLog() {
-  const terminal = document.getElementById('logTerminal');
-  const status = document.getElementById('logStatus');
-  try {
-    const res = await fetch('/api/log?t=' + Date.now());
-    if (res.ok) {
-      const text = await res.text();
-      terminal.textContent = text || '[modHEN] Log buffer is empty.';
-      terminal.scrollTop = terminal.scrollHeight;
-      status.textContent = 'Updated at ' + new Date().toLocaleTimeString();
-    } else {
-      terminal.textContent = '[modHEN] Error fetching log (HTTP ' + res.status + ')';
-    }
-  } catch (e) {
-    terminal.textContent = '[modHEN] Waiting for log daemon... (' + e.message + ')';
-  }
-}
-
-async function openEngineModal() {
-  try {
-    const res = await fetch('/api/config?t=' + Date.now());
-    if (res.ok) {
-      const cfg = await res.json();
-      document.getElementById('cfgNativeOrbx').checked = !!cfg.native_orbx;
-      document.getElementById('cfgLegacyPrx').checked = !!cfg.legacy_prx;
-      document.getElementById('cfgLegacyPrxName').value = cfg.legacy_prx_name || '';
-    }
-  } catch (e) {}
-  openModal('engineModal');
-}
-
-async function saveEngineConfig() {
-  const nativeOrbx = document.getElementById('cfgNativeOrbx').checked ? '1' : '0';
-  const legacyPrx = document.getElementById('cfgLegacyPrx').checked ? '1' : '0';
-  const legacyName = document.getElementById('cfgLegacyPrxName').value.trim();
-  const url = `/api/config?native_orbx=${nativeOrbx}&legacy_prx=${legacyPrx}&legacy_prx_name=${encodeURIComponent(legacyName)}`;
-  try {
-    const res = await fetch(url, { method: 'POST' });
-    if (res.ok) {
-      closeModal('engineModal');
-      showToast('Engine settings saved to /data/modHEN/config.ini (takes effect on next game launch)', 'success');
-      pollGameStatus();
-    } else {
-      showToast('Failed to save engine settings', 'error');
-    }
-  } catch (e) {
-    showToast('Network error saving settings', 'error');
-  }
-}
-
+/* In-Game Mod Menu & ENB/ReShade Controller */
 const MENU_TOGGLE_DEFS = [
   ['menu_open', 'Show In-Game Menu'],
   ['godmode', 'God Mode'],
+  ['noclip_on', 'Airbreak / No-Clip'],
   ['never_wanted', 'Never Wanted'],
   ['super_jump', 'Super Jump'],
-  ['fast_run', 'Fast Run / Swim'],
+  ['fast_run', 'Fast Run & Swim'],
   ['no_ragdoll', 'No Ragdoll'],
+  ['invisible', 'Invisible Ped'],
+  ['spec_ability_inf', 'Inf Special Ability'],
   ['inf_ammo', 'Infinite Clip Ammo'],
-  ['explosive_ammo', 'Explosive Ammo'],
+  ['explosive_ammo', 'Explosive Bullets'],
+  ['fire_ammo', 'Fire Bullets'],
   ['veh_god', 'Vehicle God Mode'],
-  ['horn_boost', 'Horn Boost (L3)']
+  ['seatbelt_on', 'True Seatbelt'],
+  ['horn_boost', 'Horn Boost'],
+  ['veh_drift_mode', 'Drift Mode'],
+  ['fuel_system_on', 'Realistic Fuel System'],
+  ['calmer_police_on', 'Calmer Police AI'],
+  ['low_gravity', 'Moon Gravity'],
+  ['mobile_radio', 'Mobile Radio'],
+  ['clock_paused', 'Freeze Clock'],
+  ['afp_autoturn', 'AFP: Auto-Turn Body'],
+  ['afp_clip_fix', 'AFP: Near-Clip Fix'],
+  ['afp_inertia', 'AFP: Vehicle Inertia'],
+  ['afp_crouch_lower', 'AFP: Crouch Lowering'],
+  ['cinematic_cam', 'Cinematic Camera'],
+  ['cam_anti_shake', 'Disable Camera Shake']
+];
+
+const PAD_BIND_OPTS = [
+  [0,        'None / Unbound'],
+  [0x0800,   'R1'],
+  [0x0400,   'L1'],
+  [0x0200,   'R2'],
+  [0x0100,   'L2'],
+  [0x0002,   'L3 (Left Stick)'],
+  [0x0004,   'R3 (Right Stick)'],
+  [0x0010,   'D-Pad Up'],
+  [0x0040,   'D-Pad Down'],
+  [0x0080,   'D-Pad Left'],
+  [0x0020,   'D-Pad Right'],
+  [0x4000,   'Cross (X)'],
+  [0x2000,   'Circle (O)'],
+  [0x8000,   'Square'],
+  [0x1000,   'Triangle'],
+  [0x100000, 'Touchpad']
+];
+
+function fmtPadName(bit) {
+  const f = PAD_BIND_OPTS.find(x => x[0] === (bit >>> 0));
+  return f ? f[1] : ('0x' + (bit >>> 0).toString(16));
+}
+
+function populateKeybindDropdown(id, val, allowZero) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (!el.dataset.init) {
+    el.innerHTML = PAD_BIND_OPTS
+      .filter(x => allowZero || x[0] !== 0)
+      .map(x => `<option value="${x[0]}">${x[1]}</option>`).join('');
+    el.dataset.init = '1';
+  }
+  if (document.activeElement !== el) el.value = String(val >>> 0);
+}
+
+const GFX_PRESET_DEFS = [
+  [0,  'OFF (Original NVE)',     'Restores installed NVE / weather'],
+  [1,  'QuantV Photoreal ENB',   'MODHEN_QUANTV_ENB'],
+  [2,  'QuantV California Sun',  'MODHEN_QUANTV_SUN'],
+  [3,  'QuantV Midnight Neon',   'MODHEN_QUANTV_NIGHT'],
+  [4,  'Calibrated PS5 ENB',     'MODHEN_NVE_ENB'],
+  [5,  'HDR Shadow Bloom',       'MODHEN_HDR_BLOOM'],
+  [6,  'Mirror Car Reflect',     'MODHEN_MIRROR_REFL'],
+  [7,  'Dark Filmic Noir',       'MODHEN_DARK_FILMIC'],
+  [8,  'Storm & Rain Pop',       'MODHEN_STORM_MOOD'],
+  [9,  'Miami Vice Sunset',      'MODHEN_MIAMI_SUNSET'],
+  [10, 'Vivid Photoreal',        'MODHEN_VIVID_COLOR'],
+  [11, 'Deep Shadow & AO',       'MODHEN_SOFT_AO'],
+  [12, 'Clear Haze Remover',     'MODHEN_CLEAR_FOG'],
+  [13, 'Crisp Cool Tones',       'MODHEN_COOL_FROST'],
+  [14, 'Natural Ambient GI',     'MODHEN_NATURAL_GI']
 ];
 
 async function refreshModMenuState() {
@@ -946,24 +2498,578 @@ async function refreshModMenuState() {
     const d = await res.json();
     const banner = document.getElementById('menuStatusBanner');
     if (banner) {
-      banner.textContent = d.ready && d.armed
-        ? `ACTIVE | Ticks: ${d.ticks} | FPS: ${d.fps.toFixed(1)} | PadCalls: ${d.pad_calls || 0} (raw: 0x${(d.pad_raw || 0).toString(16)}) | Open: R1 + D-Pad Left`
-        : 'Waiting for GTA V gameplay script thread (main_persistent)...';
+      const openCombo = d.bind_open_mod
+        ? `${fmtPadName(d.bind_open_mod)} + ${fmtPadName(d.bind_open_btn || 0x40)}`
+        : fmtPadName(d.bind_open_btn || 0x40);
+      banner.textContent = (d.ready && d.armed)
+        ? `Connected • ${d.fps.toFixed(1)} FPS • Open: ${openCombo}`
+        : 'Waiting for GTA V gameplay session...';
+      banner.style.color = (d.ready && d.armed) ? 'var(--success)' : 'var(--text-muted)';
     }
     const grid = document.getElementById('menuToggleGrid');
     if (grid) {
       grid.innerHTML = MENU_TOGGLE_DEFS.map(([k, lbl]) => {
         const on = !!d[k];
-        const col = on ? '#10b981' : '#64748b';
-        return `<button class="btn btn-secondary btn-sm" style="justify-content:space-between; display:flex; border-color:${on ? 'rgba(16,185,129,0.5)' : 'var(--border)'};" onclick="toggleMenuOpt('${k}', ${on ? 0 : 1})"><span>${lbl}</span><strong style="color:${col};">${on ? 'ON' : 'OFF'}</strong></button>`;
+        return `
+          <button class="toggle-btn ${on ? 'on' : ''}" onclick="toggleMenuOpt('${k}', ${on ? 0 : 1})">
+            <span>${lbl}</span>
+            <span class="pill-state">${on ? 'ON' : 'OFF'}</span>
+          </button>`;
       }).join('');
     }
+
+    if (d.addon_cars && Array.isArray(d.addon_cars) && d.addon_cars.length > 0) {
+      const carBox = document.getElementById('addonCarButtonList');
+      if (carBox) {
+        carBox.innerHTML = d.addon_cars.map(c => `
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,${c.hash})" title="Spawn ${c.name}">
+            🏎️ ${c.label} <span style="opacity:0.6; font-size:11px;">(${c.name})</span>
+          </button>
+        `).join('') + `
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xAC5DF515)">🏎️ Zentorno</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB779A091)">🏎️ Adder</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0x2F03547B)">🚁 Buzzard</button>
+          <button class="btn btn-secondary btn-sm" onclick="sendMenuAction(11,0,0xB39B0AE6)">✈️ Lazer</button>
+        `;
+      }
+    }
+
+    const syncVal = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = String(v); };
+    syncVal('menuCloudKeyframeSel', (d.cloud_keyframe_idx !== undefined) ? d.cloud_keyframe_idx : -1);
+    syncVal('menuCloudHatSel', (d.cloud_hat_idx !== undefined && d.cloud_hat_idx >= 0) ? d.cloud_hat_idx : '');
+    const camMap = { 0: '0', 1: '1', 2: '2', 4: '3' };
+    syncVal('menuPedViewSel', camMap[d.cam_ped_view_mode] || '0');
+    syncVal('menuVehViewSel', camMap[d.cam_veh_view_mode] || '0');
+    syncVal('menuAfpModeSel', d.afp_mode || 0);
+    syncVal('menuAfpFovSel', (d.afp_fov_idx !== undefined) ? d.afp_fov_idx : 3);
+    syncVal('menuAfpDriftSel', d.afp_smooth_follow || 0);
+    syncVal('menuTimeScaleSel', d.time_scale_idx || 0);
+    syncVal('menuSpeedoSel', d.speedo_mode || 0);
+    syncVal('menuPosSel', d.menu_position || 0);
+    syncVal('menuScaleSel', (d.menu_scale !== undefined) ? d.menu_scale : 1);
+    const kSt = document.getElementById('chkKeepSteering'); if (kSt) kSt.checked = !!d.keep_steering;
+    const kNs = document.getElementById('chkNavStick');     if (kNs) kNs.checked = !!d.nav_stick;
+    populateKeybindDropdown('kbOpenMod',     d.bind_open_mod || 0, true);
+    populateKeybindDropdown('kbOpenBtn',     d.bind_open_btn || 0x40, false);
+    populateKeybindDropdown('kbAccept',      d.bind_accept || 0x4000, false);
+    populateKeybindDropdown('kbCancel',      d.bind_cancel || 0x2000, false);
+    populateKeybindDropdown('kbNoclip',      d.bind_noclip || 0, true);
+    populateKeybindDropdown('kbQuickRepair', d.bind_quick_repair || 0, true);
+
+    /* Update ENB & ReShade Studio Tab */
+    const curGfx = d.gfx_preset_idx || 0;
+    const curStr = d.gfx_strength_pct || 100;
+    const curGrain = d.gfx_film_grain || 0;
+    const curPfx = d.gfx_postfx_idx || 0;
+
+    const gfxGrid = document.getElementById('gfxPresetGrid');
+    if (gfxGrid) {
+      gfxGrid.innerHTML = GFX_PRESET_DEFS.map(([idx, lbl]) => {
+        const on = (curGfx === idx);
+        return `
+          <button class="toggle-btn ${on ? 'on' : ''}" onclick="toggleMenuOpt('gfx_preset_idx', ${on && idx !== 0 ? 0 : idx})">
+            <span>${lbl}</span>
+            <span class="pill-state">${on ? 'ACTIVE' : 'APPLY'}</span>
+          </button>`;
+      }).join('');
+    }
+
+    const activeEntry = GFX_PRESET_DEFS.find(x => x[0] === curGfx) || GFX_PRESET_DEFS[0];
+    const actLbl = document.getElementById('gfxActivePresetLabel');
+    if (actLbl) actLbl.textContent = activeEntry[1];
+    const actSub = document.getElementById('gfxActiveStrengthSub');
+    if (actSub) actSub.textContent = `Strength: ${curStr}% • Grain: ${curGrain ? curGrain + '%' : 'OFF'}`;
+
+    const strSlider = document.getElementById('gfxStrengthSlider');
+    if (strSlider && document.activeElement !== strSlider) {
+      strSlider.value = curStr;
+      document.getElementById('gfxStrengthVal').textContent = curStr + '%';
+    }
+    const grainSlider = document.getElementById('gfxGrainSlider');
+    if (grainSlider && document.activeElement !== grainSlider) {
+      grainSlider.value = curGrain;
+      document.getElementById('gfxGrainVal').textContent = curGrain + '%';
+    }
+    const pfxSel = document.getElementById('gfxPostFxSelect');
+    if (pfxSel && document.activeElement !== pfxSel) {
+      pfxSel.value = String(curPfx);
+    }
+
+    /* Crash Probe Health Banner */
+    const probeHealth = document.getElementById('probeHealthText');
+    const probeCrumb = document.getElementById('probeBreadcrumbText');
+    if (probeHealth) {
+      if (d.ready && d.armed) {
+        probeHealth.textContent = `Healthy (${d.probe_resolved_count || 0}/${d.probe_total_natives || 156} Natives)`;
+        probeHealth.style.color = 'var(--success)';
+      } else {
+        probeHealth.textContent = 'Standby (Game Idle)';
+        probeHealth.style.color = 'var(--text-muted)';
+      }
+    }
+    if (probeCrumb) {
+      probeCrumb.textContent = `Stage: ${d.probe_stage === 1 ? 'IN_NATIVE' : 'IDLE'} • Last: ${d.probe_last_arg || 'NONE'}`;
+    }
+
+    /* GNM Swapchain & Flight Recorder Probe */
+    const gnmStatus = document.getElementById('gnmProbeStatus');
+    const gnmDetails = document.getElementById('gnmProbeDetails');
+    if (gnmStatus && gnmDetails) {
+      if (d.gnm_flips && d.gnm_flips > 0) {
+        gnmStatus.textContent = `Hooked (${d.gnm_flips.toLocaleString()} Flips)`;
+        gnmStatus.style.color = 'var(--success)';
+        gnmDetails.textContent = `Buf: #${d.gnm_display_idx} • DCBs: ${d.gnm_dcb_count} (${d.gnm_dcb_total_kb} KB)`;
+      } else if (d.ready && d.armed) {
+        gnmStatus.textContent = 'Armed (Waiting for Flip)';
+        gnmStatus.style.color = 'var(--warning)';
+        gnmDetails.textContent = `Stage: ${d.gnm_stage || 0} • DCBs: 0`;
+      } else {
+        gnmStatus.textContent = 'Standby (Game Idle)';
+        gnmStatus.style.color = 'var(--text-muted)';
+        gnmDetails.textContent = 'Buf: -- • DCBs: 0 (0 KB)';
+      }
+    }
+
+    /* Stage 1 PSSL .sb Shader Probe & Tunables */
+    const sbBadge = document.getElementById('sbShaderBadge');
+    const sbBtn = document.getElementById('btnToggleShader');
+    const sbStatus = document.getElementById('sbShaderStatus');
+    const sbDispatches = document.getElementById('sbShaderDispatches');
+    const sbGpuVa = document.getElementById('sbShaderGpuVa');
+
+    if (sbBadge) {
+      if (d.shader_loaded === 1) {
+        if (d.shader_enabled === 1) {
+          sbBadge.textContent = 'ACTIVE';
+          sbBadge.style.color = 'var(--success)';
+          sbBadge.style.borderColor = 'var(--success)';
+          if (sbBtn) { sbBtn.textContent = '⏸ Pause Shader'; sbBtn.className = 'btn btn-secondary btn-sm'; }
+        } else {
+          sbBadge.textContent = 'PAUSED';
+          sbBadge.style.color = 'var(--warning)';
+          sbBadge.style.borderColor = 'var(--warning)';
+          if (sbBtn) { sbBtn.textContent = '⚡ Enable Shader'; sbBtn.className = 'btn btn-primary btn-sm'; }
+        }
+      } else if (d.shader_loaded === 2) {
+        sbBadge.textContent = 'ERROR';
+        sbBadge.style.color = 'var(--danger)';
+        sbBadge.style.borderColor = 'var(--danger)';
+        if (sbBtn) { sbBtn.textContent = '⚡ Enable Shader'; sbBtn.className = 'btn btn-secondary btn-sm'; }
+      } else {
+        sbBadge.textContent = 'NO SHADER';
+        sbBadge.style.color = 'var(--text-muted)';
+        sbBadge.style.borderColor = 'var(--border)';
+        if (sbBtn) { sbBtn.textContent = '⚡ Enable Shader'; sbBtn.className = 'btn btn-secondary btn-sm'; }
+      }
+    }
+    if (sbStatus) sbStatus.textContent = d.shader_msg || (d.shader_loaded === 1 ? 'Compute Active' : 'Standby (0 GPU writes)');
+    if (sbDispatches) sbDispatches.textContent = (d.shader_dispatches || 0).toLocaleString();
+    if (sbGpuVa) sbGpuVa.textContent = d.shader_size ? `${d.shader_size} Bytes (GCN CS)` : '0x0 (Standby)';
+
+    /* Sync tunables if not being dragged */
+    const syncSlider = (id, valId, val) => {
+      const s = document.getElementById(id);
+      const v = document.getElementById(valId);
+      if (s && document.activeElement !== s && val !== undefined) {
+        s.value = val;
+        if (v) v.textContent = parseFloat(val).toFixed(2);
+      }
+    };
+    syncSlider('sbBloomIntSlider', 'sbBloomIntVal', d.shader_bloom_int);
+    syncSlider('sbBloomThreshSlider', 'sbBloomThreshVal', d.shader_bloom_thresh);
+    syncSlider('sbExpSlider', 'sbExpVal', d.shader_exposure);
+    syncSlider('sbConSlider', 'sbConVal', d.shader_contrast);
+    syncSlider('sbSatSlider', 'sbSatVal', d.shader_saturation);
+    syncSlider('sbVigSlider', 'sbVigVal', d.shader_vignette);
+    syncSlider('sbAaSlider', 'sbAaVal', d.shader_aa);
+    syncSlider('sbSharpSlider', 'sbSharpVal', d.shader_sharpness);
+    syncSlider('depthSsaoIntSlider', 'depthSsaoIntVal', d.ssao_int);
+    syncSlider('depthSsaoCpSlider', 'depthSsaoCpVal', d.ssao_cp);
+    syncSlider('depthSsrIntSlider', 'depthSsrIntVal', d.ssr_int);
+    syncSlider('depthSsrDistSlider', 'depthSsrDistVal', d.ssr_dist);
+    applyDepthTelemetry(d);
   } catch (e) {}
 }
 
-function openModMenuModal() {
-  openModal('modMenuModal');
+let g_shader_enabled = 0;
+async function toggleShaderEngine() {
+  g_shader_enabled = g_shader_enabled ? 0 : 1;
+  try {
+    const res = await fetch(`/api/shader?toggle=${g_shader_enabled}`, { method: 'POST' });
+    if (res.ok) {
+      showToast(g_shader_enabled ? 'Real-Time Shader Enabled!' : 'Shader Paused (Pass-Through)', 'success');
+      pollMenuStatus();
+    }
+  } catch (e) {
+    showToast('Failed to toggle shader', 'error');
+  }
+}
+
+async function reloadShaderFile() {
+  try {
+    const res = await fetch('/api/shader?reload=1', { method: 'POST' });
+    if (res.ok) {
+      const d = await res.json();
+      showToast(d.loaded === 1 ? 'postprocess.sb reloaded successfully!' : (d.msg || 'Reload complete'), d.loaded === 1 ? 'success' : 'warning');
+      pollMenuStatus();
+    }
+  } catch (e) {
+    showToast('Failed to reload shader', 'error');
+  }
+}
+
+let tuneDebounce = null;
+function updateShaderTune(focus = 'exp') {
+  const bint = document.getElementById('sbBloomIntSlider')?.value || 0.35;
+  const bth  = document.getElementById('sbBloomThreshSlider')?.value || 0.85;
+  const exp  = document.getElementById('sbExpSlider')?.value || 1.00;
+  const con  = document.getElementById('sbConSlider')?.value || 1.05;
+  const sat  = document.getElementById('sbSatSlider')?.value || 1.10;
+  const vig  = document.getElementById('sbVigSlider')?.value || 0.20;
+  const aa   = document.getElementById('sbAaSlider')?.value || 0.35;
+  const shp  = document.getElementById('sbSharpSlider')?.value || 0.20;
+
+  document.getElementById('sbBloomIntVal').textContent = parseFloat(bint).toFixed(2);
+  document.getElementById('sbBloomThreshVal').textContent = parseFloat(bth).toFixed(2);
+  document.getElementById('sbExpVal').textContent = parseFloat(exp).toFixed(2);
+  document.getElementById('sbConVal').textContent = parseFloat(con).toFixed(2);
+  document.getElementById('sbSatVal').textContent = parseFloat(sat).toFixed(2);
+  document.getElementById('sbVigVal').textContent = parseFloat(vig).toFixed(2);
+  document.getElementById('sbAaVal').textContent = parseFloat(aa).toFixed(2);
+  document.getElementById('sbSharpVal').textContent = parseFloat(shp).toFixed(2);
+
+  clearTimeout(tuneDebounce);
+  tuneDebounce = setTimeout(async () => {
+    try {
+      await fetch(`/api/shader?focus=${focus}&bin=${bint}&bth=${bth}&exp=${exp}&con=${con}&sat=${sat}&vig=${vig}&aa=${aa}&sharp=${shp}`, { method: 'POST' });
+    } catch (e) {}
+  }, 40);
+}
+
+async function uploadSbShader(files) {
+  if (!files || files.length === 0) return;
+  const file = files[0];
+  showToast(`Uploading ${file.name}...`, 'info');
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch(`/api/upload?path=/data/orbx/shaders/postprocess.sb`, {
+      method: 'POST',
+      body: buf
+    });
+    if (res.ok) {
+      showToast('Uploaded! Verifying shader header...', 'success');
+      await reloadShaderFile();
+    } else {
+      showToast('Upload failed', 'error');
+    }
+  } catch (e) {
+    showToast('Upload error: ' + e.message, 'error');
+  }
+}
+
+let depthTuneDebounce = null;
+function updateDepthTune(focus = 'ssao') {
+  const ssao_int  = document.getElementById('depthSsaoIntSlider')?.value || 5.80;
+  const ssao_cp   = document.getElementById('depthSsaoCpSlider')?.value || 0.78;
+  const ssr_int   = document.getElementById('depthSsrIntSlider')?.value || 2.45;
+  const ssr_dist  = document.getElementById('depthSsrDistSlider')?.value || 500;
+
+  if (document.getElementById('depthSsaoIntVal')) document.getElementById('depthSsaoIntVal').textContent = parseFloat(ssao_int).toFixed(2) + 'x';
+  if (document.getElementById('depthSsaoCpVal'))  document.getElementById('depthSsaoCpVal').textContent  = parseFloat(ssao_cp).toFixed(2);
+  if (document.getElementById('depthSsrIntVal'))  document.getElementById('depthSsrIntVal').textContent  = parseFloat(ssr_int).toFixed(2) + 'x';
+  if (document.getElementById('depthSsrDistVal')) document.getElementById('depthSsrDistVal').textContent = parseInt(ssr_dist) + 'm';
+
+  clearTimeout(depthTuneDebounce);
+  depthTuneDebounce = setTimeout(async () => {
+    try {
+      await fetch(`/api/depth?focus=${focus}&ssao_int=${ssao_int}&ssao_cp=${ssao_cp}&ssr_int=${ssr_int}&ssr_dist=${ssr_dist}`, { method: 'POST' });
+    } catch (e) {}
+  }, 40);
+}
+
+async function fetchDepthTelemetry() {
+  try {
+    const res = await fetch('/api/depth');
+    if (res.ok) {
+      const d = await res.json();
+      applyDepthTelemetry(d);
+      showToast('Depth telemetry refreshed', 'info');
+    }
+  } catch (e) {
+    showToast('Failed to fetch depth telemetry', 'error');
+  }
+}
+
+function applyDepthTelemetry(d) {
+  if (!d) return;
+  const badge = document.getElementById('depthStageBadge');
+  if (badge) {
+    if (d.depth_va && d.depth_va !== '0x0') {
+      badge.textContent = 'Depth Buffer Armed: ' + d.depth_va;
+      badge.style.color = 'var(--success)';
+      badge.style.borderColor = 'var(--success)';
+    } else {
+      badge.textContent = 'RAGE Depth Active (1080p)';
+      badge.style.color = 'var(--primary)';
+      badge.style.borderColor = 'var(--primary)';
+    }
+  }
+  if (document.getElementById('depthGpuVa') && d.depth_va && d.depth_va !== '0x0') {
+    document.getElementById('depthGpuVa').textContent = d.depth_va;
+  }
+  if (document.getElementById('depthHits')) {
+    document.getElementById('depthHits').textContent = (d.depth_hits || d.gnm_flips || 0).toLocaleString();
+  }
+}
+
+async function setGfxStrength(pct) {
+  await sendMenuAction(13, parseInt(pct, 10) || 100, 0);
   refreshModMenuState();
+}
+
+/* Client-Side PC enbseries.ini / ReShade.ini Converter */
+function clampNum(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function parseIniAndConvert(text) {
+  const flat = {};
+  let sec = 'GLOBAL';
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('//') || line.startsWith(';') || line.startsWith('#')) continue;
+    if (line.startsWith('[') && line.includes(']')) {
+      sec = line.slice(1, line.indexOf(']')).trim().toUpperCase();
+      continue;
+    }
+    const eq = line.indexOf('=');
+    if (eq > 0) {
+      const k = line.slice(0, eq).trim().toLowerCase();
+      let v = line.slice(eq + 1).split('//')[0].split(';')[0].trim();
+      flat[sec + '.' + k] = v;
+      flat[k] = v;
+    }
+  }
+
+  const getFloat = (k, defVal) => {
+    const raw = flat[k];
+    if (!raw) return defVal;
+    const m = raw.match(/[-+]?\d*\.?\d+/);
+    return m ? parseFloat(m[0]) : defVal;
+  };
+
+  let bloom = 0.62, exp = -0.06, sat = 1.18, thresh = 0.66, ssao = 2.44, vig = 0.18;
+
+  if (flat['COLORCORRECTION.brightness'] || flat['brightness']) {
+    const b = getFloat('COLORCORRECTION.brightness', getFloat('brightness', 1.0));
+    exp = clampNum((b - 1.0) * 0.45, -0.50, 0.65);
+  }
+  if (flat['COLORCORRECTION.gammacurve'] || flat['gammacurve']) {
+    const gc = getFloat('COLORCORRECTION.gammacurve', getFloat('gammacurve', 1.0));
+    thresh = clampNum(0.85 - (gc - 1.0) * 0.65, 0.30, 1.30);
+  }
+  if (flat['GAMEBLOOM.amountnight'] || flat['GAMEBLOOM.amountday']) {
+    const dn = getFloat('GAMEBLOOM.amountday', 1.0);
+    const nn = getFloat('GAMEBLOOM.amountnight', 1.0);
+    bloom = clampNum(((dn + nn) * 0.5) * 0.38, 0.15, 1.60);
+  } else if (flat['BLOOM.amountday'] || flat['ebloomamount']) {
+    const bl = getFloat('BLOOM.amountday', getFloat('ebloomamount', 0.58));
+    if (bl > 0.10) bloom = clampNum(bl > 1.5 ? bl * 0.45 : bl, 0.05, 1.60);
+  }
+  if (flat['vibrance']) {
+    const vb = getFloat('vibrance', 0.25);
+    sat = clampNum(1.0 + vb * 0.65, 0.60, 1.70);
+  } else if (flat['saturation']) {
+    const st = getFloat('saturation', 1.25);
+    sat = clampNum(st > 0.3 ? st : 1.0 + st, 0.60, 1.70);
+  }
+  if (flat['hdrpower']) {
+    const hp = getFloat('hdrpower', 1.25);
+    thresh = clampNum(1.05 - (hp - 1.0) * 0.35, 0.30, 1.30);
+  }
+  if (flat['SSAO_SSIL.aoamountday'] || flat['SSAO_SSIL.aoamount'] || flat['aoamount']) {
+    const ao = getFloat('SSAO_SSIL.aoamountday', getFloat('SSAO_SSIL.aoamount', getFloat('aoamount', 0.7)));
+    const il = getFloat('SSAO_SSIL.ilamountday', 1.0);
+    ssao = clampNum(ao * 2.2 + clampNum(il * 0.18, 0.0, 1.2), 1.00, 3.80);
+  }
+  if (flat['vignetteamount']) {
+    const vg = Math.abs(getFloat('vignetteamount', 0.18));
+    vig = clampNum(vg * 0.35, 0.00, 0.65);
+  }
+
+  document.getElementById('convBloom').value = bloom.toFixed(2);
+  document.getElementById('convExp').value = exp.toFixed(2);
+  document.getElementById('convSat').value = sat.toFixed(2);
+  document.getElementById('convThresh').value = thresh.toFixed(2);
+  document.getElementById('convSsao').value = ssao.toFixed(2);
+  document.getElementById('convVig').value = vig.toFixed(2);
+  updateConverterXmlPreview();
+}
+
+function buildModifierBlock(name, tags) {
+  const lines = [`  <modifier name="${name}" numMods="${tags.length}" userFlags="0">`];
+  for (const [t, v1, v2] of tags) {
+    lines.push(`    <${t}>${Number(v1).toFixed(3)} ${Number(v2).toFixed(3)}</${t}>`);
+  }
+  lines.push('  </modifier>');
+  return lines.join('\n');
+}
+
+function getCustomModifierTags() {
+  const bloom = parseFloat(document.getElementById('convBloom')?.value || '0.58');
+  const exp = parseFloat(document.getElementById('convExp')?.value || '0.05');
+  const sat = parseFloat(document.getElementById('convSat')?.value || '1.28');
+  const thresh = parseFloat(document.getElementById('convThresh')?.value || '0.58');
+  const ssao = parseFloat(document.getElementById('convSsao')?.value || '2.40');
+  const vig = parseFloat(document.getElementById('convVig')?.value || '0.18');
+
+  document.getElementById('convBloomLbl').textContent = bloom.toFixed(2);
+  document.getElementById('convExpLbl').textContent = exp.toFixed(2);
+  document.getElementById('convSatLbl').textContent = sat.toFixed(2);
+  document.getElementById('convThreshLbl').textContent = thresh.toFixed(2);
+  document.getElementById('convSsaoLbl').textContent = ssao.toFixed(2);
+  document.getElementById('convVigLbl').textContent = vig.toFixed(2);
+
+  return [
+    ['postfx_exposure', exp, 0.0],
+    ['postfx_exposure_min', -0.90, 0.0],
+    ['postfx_exposure_max', 1.85, 0.0],
+    ['postfx_bright_pass_thresh_width', 0.28, 0.0],
+    ['postfx_bright_pass_thresh', thresh, 0.0],
+    ['postfx_intensity_bloom', bloom, 0.0],
+    ['postfx_desaturation', sat, 0.0],
+    ['postfx_vignetting_intensity', vig, 0.0],
+    ['postfx_vignetting_radius', 14.0, 0.0],
+    ['ssao_inten', ssao, 0.0],
+    ['light_amb_occ_mult', 1.40, 0.0],
+    ['light_amb_occ_mult_veh', 1.50, 0.0],
+    ['reflection_tweak_emissive', 2.00, 0.0],
+    ['lens_artefacts_intensity', 0.25, 0.0]
+  ];
+}
+
+function updateConverterXmlPreview() {
+  const tags = getCustomModifierTags();
+  const preview = document.getElementById('convertedXmlPreview');
+  if (preview) {
+    preview.value = buildModifierBlock('MODHEN_CUSTOM_ENB', tags);
+  }
+}
+
+function handleIniFileSelect(files) {
+  if (!files || !files.length) return;
+  const f = files[0];
+  document.getElementById('iniFileNameLabel').innerHTML = `Loaded: <code>${f.name}</code> (${formatBytes(f.size)})`;
+  const reader = new FileReader();
+  reader.onload = e => {
+    parseIniAndConvert(e.target.result || '');
+    showToast(`Converted "${f.name}" to PS5 RAGE Timecycle Modifier!`, 'success');
+  };
+  reader.readAsText(f);
+}
+
+const iniDropZone = document.getElementById('iniDropZone');
+if (iniDropZone) {
+  ['dragenter', 'dragover'].forEach(ev => iniDropZone.addEventListener(ev, e => { e.preventDefault(); iniDropZone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach(ev => iniDropZone.addEventListener(ev, e => { e.preventDefault(); iniDropZone.classList.remove('dragover'); }));
+  iniDropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    iniDropZone.classList.remove('dragover');
+    if (e.dataTransfer.files && e.dataTransfer.files.length) {
+      handleIniFileSelect(e.dataTransfer.files);
+    }
+  });
+}
+
+function getDefaultModhenBlocksMap() {
+  return {
+    MODHEN_ENB_NVE: buildModifierBlock('MODHEN_ENB_NVE', [
+      ['postfx_exposure', -0.063, 0], ['postfx_exposure_min', -0.800, 0], ['postfx_exposure_max', 1.850, 0],
+      ['postfx_bright_pass_thresh_width', 0.300, 0], ['postfx_bright_pass_thresh', 0.661, 0], ['postfx_intensity_bloom', 0.616, 0],
+      ['postfx_desaturation', 1.180, 0], ['postfx_filmic_0', 1.290, 0],
+      ['postfx_correct_col_r', 1.000, 0.180], ['postfx_correct_col_g', 1.000, 0.180], ['postfx_correct_col_b', 1.000, 0.180],
+      ['postfx_vignetting_intensity', 0.180, 0], ['postfx_vignetting_radius', 14.000, 0], ['postfx_vignetting_contrast', 0.350, 0],
+      ['ssao_inten', 2.440, 0], ['light_amb_occ_mult', 1.250, 0], ['light_amb_occ_mult_veh', 1.350, 0],
+      ['light_ss_intensity', 0.660, 0], ['reflection_tweak_emissive', 2.100, 0], ['lens_artefacts_intensity', 0.220, 0]
+    ]),
+    MODHEN_ENB_QUANTV: buildModifierBlock('MODHEN_ENB_QUANTV', [
+      ['postfx_exposure', 0.02, 0], ['postfx_exposure_min', -1.10, 0], ['postfx_exposure_max', 1.95, 0],
+      ['postfx_bright_pass_thresh_width', 0.25, 0], ['postfx_bright_pass_thresh', 0.55, 0], ['postfx_intensity_bloom', 0.65, 0],
+      ['postfx_desaturation', 1.32, 0], ['postfx_vignetting_intensity', 0.22, 0], ['postfx_vignetting_radius', 13.0, 0],
+      ['ssao_inten', 2.85, 0], ['light_amb_occ_mult', 1.50, 0], ['light_amb_occ_mult_veh', 1.60, 0],
+      ['reflection_tweak_emissive', 2.35, 0], ['lens_artefacts_intensity', 0.30, 0]
+    ]),
+    MODHEN_ENB_PRSA: buildModifierBlock('MODHEN_ENB_PRSA', [
+      ['postfx_exposure', 0.08, 0], ['postfx_bright_pass_thresh_width', 0.42, 0], ['postfx_bright_pass_thresh', 0.50, 0],
+      ['postfx_intensity_bloom', 0.72, 0], ['postfx_desaturation', 1.12, 0], ['postfx_vignetting_intensity', 0.32, 0],
+      ['postfx_vignetting_radius', 12.0, 0], ['postfx_noise', 0.015, 0], ['ssao_inten', 2.40, 0], ['lens_artefacts_intensity', 0.35, 0]
+    ]),
+    MODHEN_RESHADE_VIBRANT: buildModifierBlock('MODHEN_RESHADE_VIBRANT', [
+      ['postfx_exposure', 0.03, 0], ['postfx_bright_pass_thresh_width', 0.30, 0], ['postfx_bright_pass_thresh', 0.68, 0],
+      ['postfx_intensity_bloom', 0.42, 0], ['postfx_desaturation', 1.48, 0], ['postfx_noise', 0.012, 0],
+      ['ssao_inten', 2.00, 0], ['reflection_tweak_emissive', 1.75, 0]
+    ]),
+    MODHEN_RESHADE_CRISP: buildModifierBlock('MODHEN_RESHADE_CRISP', [
+      ['postfx_exposure', -0.02, 0], ['postfx_exposure_min', -1.20, 0], ['postfx_exposure_max', 2.10, 0],
+      ['postfx_bright_pass_thresh_width', 0.22, 0], ['postfx_bright_pass_thresh', 0.58, 0], ['postfx_intensity_bloom', 0.38, 0],
+      ['postfx_desaturation', 1.25, 0], ['postfx_vignetting_intensity', 0.15, 0], ['postfx_noise', 0.018, 0],
+      ['ssao_inten', 3.10, 0], ['light_amb_occ_mult', 1.60, 0], ['reflection_tweak_emissive', 2.10, 0]
+    ]),
+    MODHEN_ENB_CYBERPUNK: buildModifierBlock('MODHEN_ENB_CYBERPUNK', [
+      ['postfx_exposure', 0.05, 0], ['postfx_bright_pass_thresh_width', 0.25, 0], ['postfx_bright_pass_thresh', 0.42, 0],
+      ['postfx_intensity_bloom', 0.95, 0], ['postfx_desaturation', 1.45, 0], ['postfx_vignetting_intensity', 0.28, 0],
+      ['chrom_aberration_coeff', 0.006, 0], ['ssao_inten', 2.60, 0], ['reflection_tweak_emissive', 3.20, 0], ['lens_artefacts_intensity', 0.45, 0]
+    ]),
+    MODHEN_CUSTOM_ENB: buildModifierBlock('MODHEN_CUSTOM_ENB', getCustomModifierTags())
+  };
+}
+
+async function copyConvertedXmlSnippet() {
+  try {
+    const preview = document.getElementById('convertedXmlPreview');
+    if (preview && preview.value) {
+      await navigator.clipboard.writeText(preview.value);
+      showToast('Copied RAGE <modifier> XML snippet to clipboard!', 'success');
+    }
+  } catch (e) {
+    showToast('Copy failed: ' + e.message, 'error');
+  }
+}
+
+async function installConvertedIniToPs5() {
+  try {
+    const bloom = parseFloat(document.getElementById('convBloom')?.value || '0.58');
+    const sat   = parseFloat(document.getElementById('convSat')?.value || '1.28');
+    const ssao  = parseFloat(document.getElementById('convSsao')?.value || '2.40');
+    const thresh= parseFloat(document.getElementById('convThresh')?.value || '0.58');
+
+    /* Map converted .ini parameters to 100% crash-proof in-memory MODHEN RAGE modifier + strength */
+    let targetPreset = 1; /* QuantV Photoreal ENB (MODHEN_QUANTV_ENB) */
+    let targetStrength = 100;
+
+    if (ssao >= 2.20) {
+      targetPreset = 11; /* Deep Shadow & AO */
+      targetStrength = Math.round(clampNum((ssao / 2.6) * 90, 45, 130));
+    } else if (sat >= 1.38) {
+      targetPreset = 10; /* Vivid Photoreal */
+      targetStrength = Math.round(clampNum((sat - 1.0) * 85, 35, 100));
+    } else if (bloom >= 0.80) {
+      targetPreset = 5; /* HDR Shadow Bloom */
+      targetStrength = Math.round(clampNum(bloom * 95, 45, 135));
+    } else if (thresh <= 0.50) {
+      targetPreset = 7; /* Dark Filmic Noir */
+      targetStrength = 80;
+    } else {
+      targetPreset = 1; /* QuantV Photoreal ENB */
+      targetStrength = 100;
+    }
+
+    await sendMenuAction(12, targetPreset, 0);
+    await sendMenuAction(13, targetStrength, 0);
+    refreshModMenuState();
+    const presetName = (GFX_PRESET_DEFS.find(x => x[0] === targetPreset) || [0, 'Custom ENB'])[1];
+    showToast(`Activated "${presetName}" (${targetStrength}% Strength) Live in Memory — Zero Disk Writes!`, 'success');
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
 }
 
 async function toggleMenuOpt(k, v) {
@@ -973,94 +3079,137 @@ async function toggleMenuOpt(k, v) {
 
 async function sendMenuAction(act, arg0 = 0, spawn = 0) {
   const res = await fetch(`/api/menu?action=${act}&arg0=${arg0}&spawn=${spawn}`, { method: 'POST' });
-  showToast(res.ok ? 'Command queued to GTA V!' : 'Launch GTA V gameplay first', res.ok ? 'success' : 'warning');
+  showToast(res.ok ? 'Command sent to GTA V!' : 'Start GTA V gameplay first', res.ok ? 'success' : 'warning');
+  if (res.ok) setTimeout(refreshModMenuState, 120);
 }
 
 async function spawnCustomCar(save) {
   const name = (document.getElementById('addonCarName')?.value || '').trim();
-  if (!name) { showToast('Enter a vehicle model name (e.g. 27rev)', 'warning'); return; }
+  if (!name) { showToast('Enter a vehicle model name first', 'warning'); return; }
   const res = await fetch(`/api/menu?name=${encodeURIComponent(name)}&save=${save ? 1 : 0}`, { method: 'POST' });
-  showToast(res.ok ? `Spawning '${name}'...` : 'Launch GTA V gameplay first', res.ok ? 'success' : 'warning');
+  showToast(res.ok ? `Spawning "${name}"...` : 'Start GTA V gameplay first', res.ok ? 'success' : 'warning');
 }
 
+async function reloadAddonCars() {
+  const res = await fetch('/api/menu?reload=1', { method: 'POST' });
+  showToast(res.ok ? 'Reloaded add-on vehicles into in-game menu!' : 'Start GTA V first', res.ok ? 'success' : 'warning');
+}
+
+/* Engine Settings */
+async function loadEngineConfig() {
+  try {
+    const res = await fetch('/api/config?t=' + Date.now());
+    if (res.ok) {
+      const cfg = await res.json();
+      document.getElementById('cfgNativeOrbx').checked = !!cfg.native_orbx;
+      document.getElementById('cfgLegacyPrx').checked = !!cfg.legacy_prx;
+      document.getElementById('cfgLegacyPrxName').value = cfg.legacy_prx_name || '';
+      document.getElementById('cfgHeapAdjuster').checked = !!cfg.heap_adjuster;
+      document.getElementById('cfgHeapProbe').checked = (cfg.heap_probe !== false);
+      if (cfg.heap_size_mb) document.getElementById('cfgHeapSizeMb').value = String(cfg.heap_size_mb);
+    }
+  } catch (e) {}
+}
+
+async function saveEngineConfig() {
+  const nativeOrbx = document.getElementById('cfgNativeOrbx').checked ? '1' : '0';
+  const legacyPrx = document.getElementById('cfgLegacyPrx').checked ? '1' : '0';
+  const legacyName = document.getElementById('cfgLegacyPrxName').value.trim();
+  const heapAdjuster = document.getElementById('cfgHeapAdjuster').checked ? '1' : '0';
+  const heapProbe = document.getElementById('cfgHeapProbe').checked ? '1' : '0';
+  const heapSizeMb = document.getElementById('cfgHeapSizeMb').value;
+  const url = `/api/config?native_orbx=${nativeOrbx}&legacy_prx=${legacyPrx}&legacy_prx_name=${encodeURIComponent(legacyName)}&heap_adjuster=${heapAdjuster}&heap_probe=${heapProbe}&heap_size_mb=${heapSizeMb}`;
+  try {
+    const res = await fetch(url, { method: 'POST' });
+    if (res.ok) {
+      showToast('Settings saved! Takes effect on next game launch.', 'success');
+      pollGameStatus();
+    } else showToast('Failed saving settings', 'error');
+  } catch (e) { showToast('Network error', 'error'); }
+}
+
+/* Status & Logs */
 async function pollGameStatus() {
   try {
     const res = await fetch('/api/status?t=' + Date.now());
+    if (!res.ok) return;
+    const data = await res.json();
+    const pill = document.getElementById('gameStatusPill');
+    const textEl = document.getElementById('gameStatusText');
+
+    document.getElementById('statNativeState').textContent = data.native_orbx ? (data.native_active ? 'Active' : 'Ready') : 'Disabled';
+    document.getElementById('statModCount').textContent = data.mod_count || 0;
+    document.getElementById('statRedirects').textContent = data.fs_redirects || 0;
+
+    if (data.game_running) {
+      pill.classList.add('online');
+      textEl.textContent = `GTA V Running (PID ${data.pid}) • ${data.mod_count || 0} Mods`;
+    } else {
+      pill.classList.remove('online');
+      textEl.textContent = 'Waiting for GTA V...';
+    }
+  } catch (e) {}
+}
+
+async function fetchLog() {
+  const terminal = document.getElementById('logTerminal');
+  const status = document.getElementById('logStatus');
+  try {
+    const res = await fetch('/api/log?t=' + Date.now());
     if (res.ok) {
-      const data = await res.json();
-      const textEl = document.getElementById('gameStatusText');
-      const pill = document.getElementById('gameStatusPill');
-      const infoEl = document.getElementById('engineSidebarInfo');
-      if (infoEl) {
-        const natLabel = data.native_orbx ? (data.native_active ? 'ACTIVE' : 'READY') : 'OFF';
-        const prxLabel = data.legacy_prx ? ('ON' + (data.legacy_prx_name ? ` (${data.legacy_prx_name})` : '')) : 'OFF';
-        infoEl.innerHTML = `Native Orbx: <strong style="color:#fff;">${natLabel}</strong><br>Legacy PRX: ${prxLabel}<br>Mods: ${data.mod_count || 0} | Redir: ${data.fs_redirects || 0}`;
-      }
-      if (data.game_running) {
-        const redirText = data.native_active ? ` | Mods:${data.mod_count} Redir:${data.fs_redirects}` : '';
-        textEl.textContent = `GTA V Running (PID ${data.pid} - ${data.title_id || 'CUSA00419'}${redirText})`;
-        pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-        pill.style.background = 'rgba(16, 185, 129, 0.15)';
-      } else {
-        textEl.textContent = 'Waiting for GTA V Launch...';
-        pill.style.borderColor = 'rgba(245, 158, 11, 0.3)';
-        pill.style.background = 'rgba(245, 158, 11, 0.08)';
-      }
+      const text = await res.text();
+      terminal.textContent = text || '[modHEN] Log is empty.';
+      terminal.scrollTop = terminal.scrollHeight;
+      status.textContent = 'Updated ' + new Date().toLocaleTimeString();
     }
   } catch (e) {}
 }
 
 function copyLogContent() {
-  const terminal = document.getElementById('logTerminal');
-  const text = terminal ? terminal.textContent : '';
-  if (!text) {
-    showToast('Log is currently empty', 'warning');
-    return;
-  }
+  const text = document.getElementById('logTerminal')?.textContent || '';
+  if (!text) return;
   if (navigator.clipboard && window.isSecureContext) {
-    navigator.clipboard.writeText(text).then(() => {
-      showToast('All logs copied to clipboard!', 'success');
-    }).catch(() => fallbackCopy(text));
+    navigator.clipboard.writeText(text).then(() => showToast('Logs copied!', 'success'));
   } else {
-    fallbackCopy(text);
-  }
-}
-
-function fallbackCopy(text) {
-  try {
     const ta = document.createElement('textarea');
     ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.top = '0';
-    ta.style.left = '0';
-    ta.style.width = '2em';
-    ta.style.height = '2em';
-    ta.style.padding = '0';
-    ta.style.border = 'none';
-    ta.style.outline = 'none';
-    ta.style.boxShadow = 'none';
-    ta.style.background = 'transparent';
     document.body.appendChild(ta);
-    ta.focus();
     ta.select();
-    const ok = document.execCommand('copy');
+    document.execCommand('copy');
     document.body.removeChild(ta);
-    if (ok) {
-      showToast('All logs copied to clipboard!', 'success');
-    } else {
-      showToast('Please select text manually and copy', 'warning');
-    }
-  } catch (err) {
-    showToast('Copy error, please select manually', 'error');
+    showToast('Logs copied!', 'success');
   }
 }
 
-// Initial Navigation, Status, and Live Log Polling
-navigateTo('/data/modHEN/plugins');
+async function clearLogs() {
+  if (!confirm('Clear all payload and console logs?')) return;
+  try {
+    const res = await fetch('/api/log/clear', { method: 'POST' });
+    if (res.ok) {
+      const terminal = document.getElementById('logTerminal');
+      if (terminal) terminal.textContent = '[modHEN] Logs cleared.';
+      showToast('Logs cleared successfully', 'success');
+    } else {
+      showToast('Failed to clear logs', 'error');
+    }
+  } catch (e) {
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+/* Initialize */
+navigateTo('/data/orbx/gta/rpf/dlc_addon');
+updateConverterXmlPreview();
+refreshModMenuState();
+loadEngineConfig();
 pollGameStatus();
-setInterval(pollGameStatus, 3000);
-fetchLog();
-setInterval(fetchLog, 2000);
+renderColorPalette();
+renderBodyPartButtons();
+setInterval(() => {
+  pollGameStatus();
+  if (activeTab === 'menu' || activeTab === 'graphics' || activeTab === 'vehicles') refreshModMenuState();
+  if (activeTab === 'logs' && document.getElementById('autoRefreshLog')?.checked) fetchLog();
+}, 2500);
 </script>
 </body>
 </html>

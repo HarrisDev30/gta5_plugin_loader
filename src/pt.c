@@ -6,6 +6,7 @@
  */
 
 #include <errno.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
@@ -85,12 +86,15 @@ int pt_attach(pid_t pid) {
         log_msg("[PT] sys_ptrace(PT_ATTACH, %d) failed: errno %d\n", pid, errno);
         return -1;
     }
-    if (waitpid(pid, &status, WUNTRACED) == -1) {
+    while (waitpid(pid, &status, WUNTRACED) == -1) {
+        if (errno == EINTR) continue;
         log_msg("[PT] waitpid(%d) after attach failed: errno %d\n", pid, errno);
+        sys_ptrace(PT_DETACH, pid, 0, 0);
         return -1;
     }
     if (!WIFSTOPPED(status)) {
         log_msg("[PT] PID %d not stopped after attach (status=0x%x)\n", pid, status);
+        sys_ptrace(PT_DETACH, pid, 0, 0);
         errno = ESRCH;
         return -1;
     }
@@ -106,13 +110,30 @@ int pt_detach(pid_t pid, int sig) {
 }
 
 int pt_step(pid_t pid) {
-    if (sys_ptrace(PT_STEP, pid, (caddr_t)1, 0) != 0) {
-        return -1;
+    int sig = 0;
+    for (int attempt = 0; attempt < 8; attempt++) {
+        if (sys_ptrace(PT_STEP, pid, (caddr_t)1, sig) != 0) {
+            return -1;
+        }
+        int status = 0;
+        while (waitpid(pid, &status, 0) == -1) {
+            if (errno != EINTR) {
+                return -1;
+            }
+        }
+        if (!WIFSTOPPED(status)) {
+            return -1;
+        }
+        int stopsig = WSTOPSIG(status);
+        if (stopsig == SIGTRAP) {
+            return 0;
+        }
+        if (stopsig == SIGKILL) {
+            return -1;
+        }
+        sig = (stopsig == SIGSTOP) ? 0 : stopsig;
     }
-    if (waitpid(pid, 0, 0) < 0) {
-        return -1;
-    }
-    return 0;
+    return -1;
 }
 
 int pt_continue(pid_t pid, int sig) {
@@ -188,13 +209,21 @@ long pt_call(pid_t pid, intptr_t addr, ...) {
     }
 
     /* Single-step until the remote function's final ret raises rsp past entry. */
+    int steps = 0;
     while ((uintptr_t)jmp_reg.r_rsp <= entry_rsp) {
+        if (steps++ >= 8192) {
+            log_msg("[PT] pt_call: step limit exceeded; restoring registers\n");
+            pt_setregs(pid, &bak_reg);
+            return -1;
+        }
         if (pt_step(pid)) {
-            log_msg("[PT] pt_call: step failed\n");
+            log_msg("[PT] pt_call: step failed; restoring registers\n");
+            pt_setregs(pid, &bak_reg);
             return -1;
         }
         if (pt_getregs(pid, &jmp_reg)) {
-            log_msg("[PT] pt_call: getregs failed\n");
+            log_msg("[PT] pt_call: getregs failed; restoring registers\n");
+            pt_setregs(pid, &bak_reg);
             return -1;
         }
     }
@@ -246,11 +275,18 @@ long pt_syscall(pid_t pid, int sysno, ...) {
         return -1;
     }
 
+    int steps = 0;
     while ((uintptr_t)jmp_reg.r_rsp <= entry_rsp) {
+        if (steps++ >= 256) {
+            pt_setregs(pid, &bak_reg);
+            return -1;
+        }
         if (pt_step(pid)) {
+            pt_setregs(pid, &bak_reg);
             return -1;
         }
         if (pt_getregs(pid, &jmp_reg)) {
+            pt_setregs(pid, &bak_reg);
             return -1;
         }
     }

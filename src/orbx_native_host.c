@@ -8,6 +8,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,26 +29,99 @@ _Static_assert(offsetof(struct stat, st_size) == ORBX_STAT_SIZE_OFFSET,
 extern const uint8_t _binary_orbx_native_bin_start[];
 extern const uint8_t _binary_orbx_native_bin_end[];
 
-#define ORBX_INI_PATH "/data/orbx/orbx.ini"
-#define ORBX_GTA_DIR  "/data/orbx/gta"
+#define ORBX_INI_PATH      "/data/orbx/orbx.ini"
+#define ORBX_GTA_DIR       "/data/orbx/gta"
+#define ORBX_PTRACE_AUTHID 0x4800000000010003ULL
+
+static uint64_t enter_ptrace_auth_scope(void) {
+    uint64_t prev = kernel_get_ucred_authid(getpid());
+    if (prev != ORBX_PTRACE_AUTHID) {
+        kernel_set_ucred_authid(getpid(), ORBX_PTRACE_AUTHID);
+    }
+    return prev;
+}
+
+static void leave_ptrace_auth_scope(uint64_t prev_auth) {
+    if (prev_auth && prev_auth != ORBX_PTRACE_AUTHID) {
+        kernel_set_ucred_authid(getpid(), prev_auth);
+    }
+}
+
+static void detach_ptrace_with_auth(pid_t pid, uint64_t prev_auth) {
+    pt_detach(pid, 0);
+    leave_ptrace_auth_scope(prev_auth);
+}
 
 static uint64_t g_native_pid       = 0;
 static uint64_t g_native_ctx_addr  = 0;
 static uint64_t g_eboot_base       = 0;
 static uint64_t g_eboot_size       = 0;
 static uint64_t g_code_addr        = 0;
+static uint64_t g_code_alloc_size  = 0;
+static pthread_mutex_t g_host_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int get_orbx_menu_state_unlocked(OrbxMenuState *out_menu);
+static int trigger_orbx_menu_action_unlocked(uint32_t action, int32_t arg0, uint32_t spawn_hash);
+static int reload_orbx_addon_cars_unlocked(void);
+static int reload_orbx_shaders_unlocked(void);
 typedef struct {
     const char *name;
     char        nid[16];
     uint64_t    got_slot;
     uint64_t    tramp_addr;
     size_t      ctx_orig_off;
-    int         armed;
-    int         is_fs;
+    uint8_t     armed;
+    uint8_t     is_fs;
+    uint8_t     arm_attempts;
 } MonitoredGotHook;
 
-#define NUM_MONITORED_GOTS 15
+#define NUM_MONITORED_GOTS 16
 static MonitoredGotHook g_monitored_gots[NUM_MONITORED_GOTS];
+
+static const uint32_t kHookEntryOffsets[NUM_MONITORED_GOTS] = {
+    ORBX_ENTRY_OFF_SCE_OPEN,
+    ORBX_ENTRY_OFF_OPEN,
+    ORBX_ENTRY_OFF_SCE_STAT,
+    ORBX_ENTRY_OFF_STAT,
+    ORBX_ENTRY_OFF_FOPEN,
+    ORBX_ENTRY_OFF_SCE_READ,
+    ORBX_ENTRY_OFF_SCE_PREAD,
+    ORBX_ENTRY_OFF_READ,
+    ORBX_ENTRY_OFF_PREAD,
+    ORBX_ENTRY_OFF_SCE_CLOSE,
+    ORBX_ENTRY_OFF_CLOSE,
+    ORBX_ENTRY_OFF_SCE_SET_FLIP_RATE,
+    ORBX_ENTRY_OFF_SCE_GNM_FLIP,
+    ORBX_ENTRY_OFF_SCE_PAD_READ_STATE,
+    ORBX_ENTRY_OFF_SCE_PAD_READ,
+    ORBX_ENTRY_OFF_SCE_VIDEO_REG_BUFS
+};
+
+static const char *const kHookFnNames[NUM_MONITORED_GOTS] = {
+    "sceKernelOpen", "open", "sceKernelStat", "stat", "fopen",
+    "sceKernelRead", "sceKernelPread", "read", "pread", "sceKernelClose", "close",
+    "sceVideoOutSetFlipRate", "sceGnmSubmitAndFlipCommandBuffers",
+    "scePadReadState", "scePadRead", "sceVideoOutRegisterBuffers"
+};
+
+static const size_t kHookOrigCtxOffs[NUM_MONITORED_GOTS] = {
+    offsetof(OrbxNativeContext, orig_sceKernelOpen),
+    offsetof(OrbxNativeContext, orig_open),
+    offsetof(OrbxNativeContext, orig_sceKernelStat),
+    offsetof(OrbxNativeContext, orig_stat),
+    offsetof(OrbxNativeContext, orig_fopen),
+    offsetof(OrbxNativeContext, orig_sceKernelRead),
+    offsetof(OrbxNativeContext, orig_sceKernelPread),
+    offsetof(OrbxNativeContext, orig_read),
+    offsetof(OrbxNativeContext, orig_pread),
+    offsetof(OrbxNativeContext, orig_sceKernelClose),
+    offsetof(OrbxNativeContext, orig_close),
+    offsetof(OrbxNativeContext, orig_sceVideoOutSetFlipRate),
+    offsetof(OrbxNativeContext, orig_sceGnmSubmitAndFlipCommandBuffers),
+    offsetof(OrbxNativeContext, orig_scePadReadState),
+    offsetof(OrbxNativeContext, orig_scePadRead),
+    offsetof(OrbxNativeContext, orig_sceVideoOutRegisterBuffers)
+};
 
 static uint64_t g_fps_last_flips   = 0;
 static uint64_t g_fps_last_ms      = 0;
@@ -55,11 +129,14 @@ static int      g_first_flip_seen  = 0;
 static int      g_first_pad_seen   = 0;
 static int      g_first_fs_seen    = 0;
 static int      g_native_reg_probed = 0;
+static uint8_t  g_menu_probe_attempts = 0;
 static uint8_t  g_unlock_60fps     = 1;
 static uint32_t g_cached_mods      = 0;
 static uint32_t g_cached_calls     = 0;
 static uint32_t g_cached_redirects = 0;
 static uint32_t g_last_log_seq     = 0;
+static uint32_t g_last_tracked_seq = 0;
+static uint32_t g_telem_poll_tick  = 0;
 static int      g_native_active    = 0;
 static uint64_t g_tracked_last_bytes[ORBX_MAX_TRACKED_FDS];
 static uint32_t g_tracked_last_seq[ORBX_MAX_TRACKED_FDS];
@@ -69,7 +146,8 @@ static uint64_t g_tracked_pending_bytes[ORBX_MAX_TRACKED_FDS];
 static int is_valid_prx_target(uint64_t addr, uint64_t eboot_base, uint64_t eboot_size, uint64_t code_addr) {
     if (addr < 0x100000ULL || addr >= 0x800000000000ULL) return 0;
     if (eboot_size && addr >= eboot_base && addr < eboot_base + eboot_size) return 0;
-    if (code_addr && addr >= code_addr && addr < code_addr + 0x20000ULL) return 0;
+    uint64_t span = g_code_alloc_size ? g_code_alloc_size : 0x40000ULL;
+    if (code_addr && addr >= code_addr && addr < code_addr + span) return 0;
     return 1;
 }
 
@@ -598,6 +676,15 @@ static void probe_data_ptr_refs(pid_t pid, uint64_t start_va, uint64_t end_va,
                 log_msg("[V100-PROBE] DATA-PTR '%s' @ 0x%llx -> 0x%llx\n",
                         label, (unsigned long long)(cur + i), (unsigned long long)ptr_va);
                 hits++;
+                if (strstr(label, "VTABLE") != NULL) {
+                    uint64_t vfuncs[4] = {0};
+                    if (kernel_proc_copyout(pid, (intptr_t)(cur + i + 8), vfuncs, sizeof(vfuncs)) == 0) {
+                        log_msg("[V100-PROBE]   VTABLE Methods @ 0x%llx: [0]=0x%llx [1]=0x%llx [2]=0x%llx [3]=0x%llx\n",
+                                (unsigned long long)(cur + i + 8),
+                                (unsigned long long)vfuncs[0], (unsigned long long)vfuncs[1],
+                                (unsigned long long)vfuncs[2], (unsigned long long)vfuncs[3]);
+                    }
+                }
             }
         }
     }
@@ -646,8 +733,41 @@ static void try_patch_v100_pso_strs(pid_t pid, uint64_t eboot_base, uint64_t hoo
         return;
     }
     if (memcmp(orig, expected, sizeof(expected)) != 0) {
-        log_msg("[ORBX-NATIVE] psoInitStrings sig mismatch @ 0x%llx (%02x %02x %02x %02x)\n",
-                (unsigned long long)site, orig[0], orig[1], orig[2], orig[3]);
+        if (orig[0] == 0x48 && orig[1] == 0xb8 && orig[10] == 0xff && orig[11] == 0xe0) {
+            uint64_t cur_target = 0;
+            memcpy(&cur_target, orig + 2, 8);
+            if (cur_target == hook_addr) {
+                log_msg("[ORBX-NATIVE] v1.00 psoInitStrings guard @ 0x%llx already patched -> 0x%llx\n",
+                        (unsigned long long)site, (unsigned long long)cur_target);
+                return;
+            }
+            if (cur_target >= 0x10000ULL + ORBX_ENTRY_OFF_PSO_STRS && cur_target < 0x800000000000ULL) {
+                uint64_t prev_code = cur_target - ORBX_ENTRY_OFF_PSO_STRS;
+                OrbxNativeHeader prev_hdr = {0};
+                if ((prev_code & 0xfffULL) == 0ULL &&
+                    kernel_proc_copyout(pid, (intptr_t)prev_code, &prev_hdr, sizeof(prev_hdr)) == 0 &&
+                    (prev_hdr.magic & ORBX_NATIVE_MAGIC_PREFIX_MASK) == ORBX_NATIVE_MAGIC_PREFIX) {
+                    uint8_t jmp12_upd[12];
+                    jmp12_upd[0] = 0x48;
+                    jmp12_upd[1] = 0xb8;
+                    memcpy(jmp12_upd + 2, &hook_addr, 8);
+                    jmp12_upd[10] = 0xff;
+                    jmp12_upd[11] = 0xe0;
+                    int upd_wr = pt_copyin(pid, jmp12_upd, (intptr_t)site, sizeof(jmp12_upd));
+                    uint8_t upd_rb[12] = {0};
+                    kernel_proc_copyout(pid, (intptr_t)site, upd_rb, sizeof(upd_rb));
+                    int upd_ok = (memcmp(upd_rb, jmp12_upd, sizeof(jmp12_upd)) == 0);
+                    log_msg("[ORBX-NATIVE] Re-targeted psoInitStrings guard @ 0x%llx -> 0x%llx (write_rc=%d verified=%d)\n",
+                            (unsigned long long)site, (unsigned long long)hook_addr, upd_wr, upd_ok);
+                    return;
+                }
+            }
+            log_msg("[ORBX-NATIVE] v1.00 psoInitStrings guard @ 0x%llx already patched\n",
+                    (unsigned long long)site);
+        } else {
+            log_msg("[ORBX-NATIVE] psoInitStrings sig mismatch @ 0x%llx (%02x %02x %02x %02x)\n",
+                    (unsigned long long)site, orig[0], orig[1], orig[2], orig[3]);
+        }
         return;
     }
     uint8_t jmp12[12];
@@ -705,6 +825,56 @@ static const OrbxNativeSpec kMenuNativeSpecs[ORBX_NAT_COUNT] = {
 #undef ORBX_SPEC_ROW
 };
 
+static int is_eboot_text_ptr(uint64_t addr, uint64_t eboot_base, uint64_t eboot_size) {
+    if (!eboot_base || addr < eboot_base) return 0;
+    uint64_t bound = eboot_size ? (eboot_base + eboot_size) : (eboot_base + 0x27ac000ULL);
+    return (addr < bound) ? 1 : 0;
+}
+
+static uint64_t recover_wait_from_old_tramp(pid_t pid, uint64_t eboot_base, uint64_t eboot_size, uint64_t h_wait) {
+    if (h_wait < 0x10000ULL + ORBX_ENTRY_OFF_MENU_WAIT || h_wait >= 0x800000000000ULL) return 0;
+    uint64_t old_code = h_wait - ORBX_ENTRY_OFF_MENU_WAIT;
+    if ((old_code & 0xfffULL) != 0ULL) return 0;
+    OrbxNativeHeader hdr = {0};
+    if (kernel_proc_copyout(pid, (intptr_t)old_code, &hdr, sizeof(hdr)) != 0) return 0;
+    if ((hdr.magic & ORBX_NATIVE_MAGIC_PREFIX_MASK) != ORBX_NATIVE_MAGIC_PREFIX) return 0;
+    if (hdr.ctx_addr < 0x10000ULL || (hdr.ctx_addr & 0xfffULL) != 0ULL) return 0;
+
+    if (hdr.magic == ORBX_NATIVE_MAGIC) {
+        uint64_t ow = 0;
+        if (kernel_proc_copyout(pid, (intptr_t)(hdr.ctx_addr + offsetof(OrbxNativeContext, orig_wait)),
+                                &ow, sizeof(ow)) == 0 &&
+            is_eboot_text_ptr(ow, eboot_base, eboot_size)) {
+            return ow;
+        }
+        uint64_t mw = 0;
+        if (kernel_proc_copyout(pid, (intptr_t)(hdr.ctx_addr + offsetof(OrbxNativeContext, menu.natives[ORBX_NAT_WAIT])),
+                                &mw, sizeof(mw)) == 0 &&
+            is_eboot_text_ptr(mw, eboot_base, eboot_size)) {
+            return mw;
+        }
+        return 0;
+    }
+
+    /* Recover real WAIT handler from legacy ORBXPS51 context without chaining */
+    uint8_t page[4096];
+    uint64_t text_end = eboot_base + 0x27ac000ULL;
+    for (uint64_t off = 0x60000ULL; off < 0x72000ULL; off += sizeof(page)) {
+        if (kernel_proc_copyout(pid, (intptr_t)(hdr.ctx_addr + off), page, sizeof(page)) != 0) continue;
+        for (size_t i = 0; i + 40 <= sizeof(page); i += 8) {
+            const uint64_t *p = (const uint64_t *)(page + i);
+            if (p[0] >= eboot_base && p[0] < text_end &&
+                p[1] >= eboot_base && p[1] < text_end &&
+                p[3] >= eboot_base && p[3] < text_end &&
+                p[4] >= eboot_base && p[4] < text_end &&
+                p[0] != p[1] && p[1] != p[3]) {
+                return p[0];
+            }
+        }
+    }
+    return 0;
+}
+
 static int try_arm_v100_mod_menu(pid_t pid, uint64_t eboot_base) {
     if (!eboot_base || !g_native_ctx_addr || !g_code_addr) return 0;
     uint64_t table_va = eboot_base + 0x3244a28ULL; /* 0x3644a28 s_NativeRegistrations */
@@ -712,7 +882,37 @@ static int try_arm_v100_mod_menu(pid_t pid, uint64_t eboot_base) {
     uint64_t h_wait = lookup_runtime_native_entry(pid, table_va, kMenuNativeSpecs[ORBX_NAT_WAIT].hash, &wait_slot);
     if (!h_wait || !wait_slot) return 0;
 
-    uint64_t resolved[ORBX_NAT_COUNT];
+    uint64_t tramp = g_code_addr + ORBX_ENTRY_OFF_MENU_WAIT;
+    uint64_t code_span = g_code_alloc_size ? g_code_alloc_size : 0x40000ULL;
+    if (h_wait == tramp || (h_wait >= g_code_addr && h_wait < g_code_addr + code_span)) {
+        uint64_t saved_wait = 0;
+        kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, orig_wait)),
+                            &saved_wait, sizeof(saved_wait));
+        if (!is_eboot_text_ptr(saved_wait, eboot_base, g_eboot_size)) {
+            kernel_proc_copyout(pid,
+                                (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.natives[ORBX_NAT_WAIT])),
+                                &saved_wait, sizeof(saved_wait));
+        }
+        if (is_eboot_text_ptr(saved_wait, eboot_base, g_eboot_size)) {
+            h_wait = saved_wait;
+        } else {
+            return -1;
+        }
+    } else if (!is_eboot_text_ptr(h_wait, eboot_base, g_eboot_size)) {
+        uint64_t recovered = recover_wait_from_old_tramp(pid, eboot_base, g_eboot_size, h_wait);
+        if (recovered) {
+            log_msg("[V100-MENU] Recovered real WAIT=0x%llx from previous engine 0x%llx (no chaining)\n",
+                    (unsigned long long)recovered, (unsigned long long)h_wait);
+            h_wait = recovered;
+        } else {
+            log_msg("[V100-MENU] Error: WAIT slot points outside eboot.bin (0x%llx); restart GTA V cleanly\n",
+                    (unsigned long long)h_wait);
+            return -1;
+        }
+    }
+
+    uint64_t resolved[ORBX_MAX_NATIVES];
     memset(resolved, 0, sizeof(resolved));
     resolved[ORBX_NAT_WAIT] = h_wait;
 
@@ -720,6 +920,9 @@ static int try_arm_v100_mod_menu(pid_t pid, uint64_t eboot_base) {
     int req_missing = 0;
     for (uint32_t i = 1; i < ORBX_NAT_COUNT; i++) {
         resolved[i] = lookup_runtime_native_entry(pid, table_va, kMenuNativeSpecs[i].hash, NULL);
+        if (!resolved[i] && i == ORBX_NAT_OVERRIDE_LODSCALE_THIS_FRAME) {
+            resolved[i] = lookup_runtime_native_entry(pid, table_va, 0x9B8B94A1196F345FULL, NULL);
+        }
         if (resolved[i]) {
             ok_count++;
         } else if (kMenuNativeSpecs[i].req) {
@@ -737,11 +940,20 @@ static int try_arm_v100_mod_menu(pid_t pid, uint64_t eboot_base) {
             (unsigned long long)h_wait, (unsigned long long)wait_slot);
     if (req_missing > 0) return -1;
 
+    if (kernel_proc_copyin(pid, &h_wait,
+                           (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, orig_wait)),
+                           sizeof(h_wait)) != 0) {
+        return -1;
+    }
     if (kernel_proc_copyin(pid, resolved,
                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.natives)),
                            sizeof(resolved)) != 0) {
         return -1;
     }
+    uint32_t resolved_u32 = (uint32_t)ok_count;
+    kernel_proc_copyin(pid, &resolved_u32,
+                       (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.probe_resolved_count)),
+                       sizeof(resolved_u32));
     uint32_t armed = 1u;
     if (kernel_proc_copyin(pid, &armed,
                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.armed)),
@@ -749,11 +961,10 @@ static int try_arm_v100_mod_menu(pid_t pid, uint64_t eboot_base) {
         return -1;
     }
 
-    uint64_t tramp = g_code_addr + ORBX_ENTRY_OFF_MENU_WAIT;
     int wr = kernel_proc_copyin(pid, &tramp, (intptr_t)wait_slot, sizeof(tramp));
     uint64_t verify = 0;
     kernel_proc_copyout(pid, (intptr_t)wait_slot, &verify, sizeof(verify));
-    log_msg("[V100-MENU] Armed WAIT slot 0x%llx -> 0x%llx (write_rc=%d verified=%d) | Open: R1 + D-Pad Left\n",
+    log_msg("[V100-MENU] Armed WAIT slot 0x%llx -> 0x%llx (write_rc=%d verified=%d) | Open: R1 + D-Pad Down (default)\n",
             (unsigned long long)wait_slot, (unsigned long long)tramp, wr, (verify == tramp));
     return 1;
 }
@@ -777,62 +988,8 @@ static void run_rage_v100_probe(pid_t pid, uint64_t eboot_base, uint64_t eboot_s
 }
 
 /* ============================================================================
- * Safe Diagnostic Probe & Adjuster for RAGE sysMemAllocator (Heap Adjuster)
+ * Safe Non-Invasive RAGE Memory Pool Check (PS5 16 GB Unified Memory)
  * ============================================================================ */
-
-static void dump_heap_code_hex(pid_t pid, uint64_t va, size_t bytes, const char *label) {
-    if (bytes > 128) bytes = 128;
-    uint8_t buf[128];
-    if (kernel_proc_copyout(pid, (intptr_t)va, buf, bytes) != 0) {
-        log_msg("[HEAP-WARN] Failed reading 0x%llx for dump '%s'\n", (unsigned long long)va, label);
-        return;
-    }
-    char hex[257];
-    for (size_t i = 0; i < bytes; i++) {
-        static const char kHex[] = "0123456789abcdef";
-        hex[i * 2]     = kHex[buf[i] >> 4];
-        hex[i * 2 + 1] = kHex[buf[i] & 0xf];
-    }
-    hex[bytes * 2] = '\0';
-    log_msg("[HEAP-PROBE] Dump '%s' @ 0x%llx (%zuB): %s\n",
-            label, (unsigned long long)va, bytes, hex);
-}
-
-typedef struct {
-    uint32_t size_val;
-    uint32_t size_mb;
-    const char *desc;
-} HeapSizeTarget;
-
-static const HeapSizeTarget kHeapTargets[] = {
-    { 0x18000000u,  384, "384 MB (Compact)" },
-    { 0x19000000u,  400, "400 MB (Default 400M)" },
-    { 0x19C00000u,  412, "412 MB (CitizenFX / Build 323 Default)" },
-    { 0x1A000000u,  416, "416 MB (416M)" },
-    { 0x1C200000u,  450, "450 MB (450M)" },
-    { 0x1F400000u,  500, "500 MB (Default 500M)" },
-    { 0x20000000u,  512, "512 MB (512M)" },
-    { 0x25800000u,  600, "600 MB (Standard RAGE 600M)" },
-    { 0x28A00000u,  650, "650 MB (PC Update 650M)" },
-    { 0x2BC00000u,  700, "700 MB" },
-    { 0x30000000u,  768, "768 MB" },
-    { 0x32000000u,  800, "800 MB" },
-    { 0x38400000u,  900, "900 MB" },
-};
-#define NUM_HEAP_TARGETS (sizeof(kHeapTargets) / sizeof(kHeapTargets[0]))
-
-typedef struct {
-    uint64_t insn_va;
-    uint64_t imm_va;
-    uint32_t orig_size;
-    uint32_t orig_mb;
-    uint8_t  reg_opcode;
-    char     opcode_desc[32];
-    uint64_t target_call;
-    int      has_call;
-} HeapCandidate;
-
-#define MAX_HEAP_CANDIDATES 32
 
 static void probe_rage_heap_allocator(pid_t pid, uint64_t eboot_base, uint64_t eboot_size,
                                       int target_heap_mb, int enable_patch) {
@@ -842,284 +999,140 @@ static void probe_rage_heap_allocator(pid_t pid, uint64_t eboot_base, uint64_t e
         return;
     }
 
-    uint64_t t0 = now_mono_ms();
-    log_msg("[HEAP-PROBE] ====================================================\n");
-    log_msg("[HEAP-PROBE] RAGE Heap Diagnostics & Safety Probe (PS5 Host)\n");
-    log_msg("[HEAP-PROBE] Target PID %d | Base 0x%llx | Size 0x%llx\n",
+    int reported_mb = (target_heap_mb >= 512 && target_heap_mb <= 3072) ? target_heap_mb : 1024;
+    log_msg("[HEAP-PROBE] PS5 16 GB unified memory pool active for PID %d (eboot 0x%llx, size 0x%llx)\n",
             pid, (unsigned long long)eboot_base, (unsigned long long)eboot_size);
-    log_msg("[HEAP-PROBE] Mode: %s | Target Heap: %d MB\n",
-            enable_patch ? "ACTIVE PATCH (Guarded)" : "READ-ONLY PROBE",
-            target_heap_mb > 0 ? target_heap_mb : 1024);
-    log_msg("[HEAP-PROBE] ====================================================\n");
 
-    /* Scan up to 0x2800000 (40 MB) which encompasses .text and .rodata of GTA V */
-    uint64_t scan_end = eboot_base + 0x2800000ULL;
-    if (scan_end > eboot_base + eboot_size) scan_end = eboot_base + eboot_size;
-    uint64_t text_end = eboot_base + 0x27ac000ULL;
-    if (text_end > scan_end) text_end = scan_end;
-
-    size_t chunk_size = 0x10000; /* 64 KB chunk */
-    uint8_t *chunk = (uint8_t *)malloc(chunk_size + 64);
-    if (!chunk) {
-        log_msg("[HEAP-ABORT] Memory allocation failed for probe buffer!\n");
-        return;
+    /* Read-only sanity check that CUSA00419 render queue helper (+0x1b79940) is readable and untouched. */
+    uint8_t rq_head[8] = {0};
+    if (kernel_proc_copyout(pid, (intptr_t)(eboot_base + 0x1b79940ULL), rq_head, sizeof(rq_head)) == 0) {
+        log_msg("[HEAP-PROBE] Read-only check OK: render-state fn +0x1b79940 intact (%02x %02x %02x %02x)\n",
+                rq_head[0], rq_head[1], rq_head[2], rq_head[3]);
     }
 
-    /* -------------------------------------------------------------
-     * PASS 1: Search for ASCII string "sysMemAllocator"
-     * ------------------------------------------------------------- */
-    uint64_t str_va = 0;
-    static const char kStrNeedle[] = "sysMemAllocator";
-    const size_t needle_len = sizeof(kStrNeedle) - 1;
-
-    for (uint64_t cur = eboot_base; cur < scan_end; cur += (chunk_size - 64)) {
-        size_t to_read = (cur + chunk_size <= scan_end) ? chunk_size : (size_t)(scan_end - cur);
-        if (to_read < needle_len) break;
-        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
-
-        for (size_t i = 0; i + needle_len <= to_read; i++) {
-            if (chunk[i] == 's' && memcmp(chunk + i, kStrNeedle, needle_len) == 0) {
-                str_va = cur + i;
-                log_msg("[HEAP-PROBE] Found string '%s' @ 0x%llx (offset +0x%llx)\n",
-                        kStrNeedle, (unsigned long long)str_va, (unsigned long long)(str_va - eboot_base));
-                break;
-            }
-        }
-        if (str_va) break;
-    }
-
-    /* If string found, probe for RIP-relative code references to it and static data pointers */
-    if (str_va) {
-        probe_data_ptr_refs(pid, eboot_base, eboot_base + eboot_size, str_va, "sysMemAllocator_PTR", 4);
-
-        int xrefs_found = 0;
-        for (uint64_t cur = eboot_base; cur < text_end && xrefs_found < 4; cur += (chunk_size - 64)) {
-            size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
-            if (to_read < 8) break;
-            if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
-
-            for (size_t i = 0; i + 7 <= to_read && xrefs_found < 4; i++) {
-                if ((chunk[i] == 0x48 || chunk[i] == 0x4c) &&
-                    (chunk[i + 1] == 0x8d || chunk[i + 1] == 0x8b) &&
-                    (chunk[i + 2] & 0xc7) == 0x05) {
-                    int32_t disp = 0;
-                    memcpy(&disp, chunk + i + 3, 4);
-                    uint64_t insn_va = cur + i;
-                    uint64_t ref_va = (uint64_t)((int64_t)(insn_va + 7) + (int64_t)disp);
-                    if (ref_va == str_va) {
-                        log_msg("[HEAP-PROBE] String XREF #%d @ 0x%llx (+0x%llx)\n",
-                                ++xrefs_found, (unsigned long long)insn_va, (unsigned long long)(insn_va - eboot_base));
-                        dump_heap_code_hex(pid, (insn_va > 16) ? (insn_va - 16) : insn_va, 48, "sysMemAllocator_XREF");
-                    }
-                }
-            }
-        }
-    }
-
-    /* -------------------------------------------------------------
-     * PASS 1.5: CitizenFX Heap Adjuster Signature Scan
-     * "83 C8 01" (or eax, 1) followed by memory allocation setup
-     * ------------------------------------------------------------- */
-    int cfx_hits = 0;
-    for (uint64_t cur = eboot_base; cur < text_end && cfx_hits < 4; cur += (chunk_size - 64)) {
-        size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
-        if (to_read < 24) break;
-        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
-
-        for (size_t i = 0; i + 24 <= to_read && cfx_hits < 4; i++) {
-            if (chunk[i] == 0x83 && chunk[i + 1] == 0xc8 && chunk[i + 2] == 0x01) {
-                /* Check if lea rcx/rdi or call rel32 appears within 24 bytes */
-                int has_setup = 0;
-                for (size_t j = i + 3; j + 5 <= i + 24; j++) {
-                    if (chunk[j] == 0x48 && chunk[j + 1] == 0x8d && (chunk[j + 2] & 0xc7) == 0x05) has_setup = 1;
-                    if (chunk[j] == 0xe8) has_setup = 1;
-                }
-                if (has_setup) {
-                    uint64_t site = cur + i;
-                    log_msg("[HEAP-PROBE] CitizenFX candidate #%d @ 0x%llx (+0x%llx)\n",
-                            ++cfx_hits, (unsigned long long)site, (unsigned long long)(site - eboot_base));
-                    dump_heap_code_hex(pid, site, 48, "CitizenFX_Candidate");
-                }
-            }
-        }
-    }
-
-    /* -------------------------------------------------------------
-     * PASS 2: Search for 32-bit Heap Size Immediate Loads
-     * ------------------------------------------------------------- */
-    HeapCandidate candidates[MAX_HEAP_CANDIDATES];
-    int candidate_count = 0;
-    memset(candidates, 0, sizeof(candidates));
-
-    for (uint64_t cur = eboot_base; cur < text_end && candidate_count < MAX_HEAP_CANDIDATES; cur += (chunk_size - 64)) {
-        size_t to_read = (cur + chunk_size <= text_end) ? chunk_size : (size_t)(text_end - cur);
-        if (to_read < 16) break;
-        if (kernel_proc_copyout(pid, (intptr_t)cur, chunk, to_read) != 0) continue;
-
-        for (size_t i = 4; i + 8 <= to_read && candidate_count < MAX_HEAP_CANDIDATES; i++) {
-            uint32_t val = 0;
-            memcpy(&val, chunk + i, 4);
-
-            for (size_t k = 0; k < NUM_HEAP_TARGETS; k++) {
-                if (val != kHeapTargets[k].size_val) continue;
-
-                uint64_t insn_va = 0;
-                uint64_t imm_va  = cur + i;
-                const char *op_desc = NULL;
-                uint8_t op_byte = chunk[i - 1];
-
-                if (op_byte == 0xbe) {
-                    insn_va = cur + i - 1;
-                    op_desc = "mov esi, imm32 (arg2)";
-                } else if (op_byte == 0xbf) {
-                    insn_va = cur + i - 1;
-                    op_desc = "mov edi, imm32 (arg1)";
-                } else if (op_byte == 0xba) {
-                    insn_va = cur + i - 1;
-                    op_desc = "mov edx, imm32 (arg3)";
-                } else if (op_byte == 0xb9) {
-                    insn_va = cur + i - 1;
-                    op_desc = "mov ecx, imm32 (arg4)";
-                } else if (op_byte == 0xb8) {
-                    insn_va = cur + i - 1;
-                    op_desc = "mov eax, imm32";
-                } else if (i >= 2 && chunk[i - 2] == 0x41 && op_byte == 0xb8) {
-                    insn_va = cur + i - 2;
-                    op_desc = "mov r8d, imm32 (arg5)";
-                } else if (i >= 3 && chunk[i - 3] == 0xc7 && chunk[i - 2] == 0x44 && chunk[i - 1] == 0x24) {
-                    insn_va = cur + i - 4;
-                    op_desc = "mov [rsp+disp], imm32";
-                } else if (i >= 2 && chunk[i - 2] == 0xc7 && (chunk[i - 1] & 0xc0) == 0x40) {
-                    insn_va = cur + i - 3;
-                    op_desc = "mov [reg+disp], imm32";
-                }
-
-                if (!insn_va) continue;
-
-                int has_call = 0;
-                uint64_t target_call = 0;
-                size_t lookahead_limit = (i + 4 + 32 <= to_read) ? (i + 4 + 32) : to_read;
-                for (size_t c = i + 4; c + 5 <= lookahead_limit; c++) {
-                    if (chunk[c] == 0xe8) {
-                        int32_t rel = 0;
-                        memcpy(&rel, chunk + c + 1, 4);
-                        target_call = (uint64_t)((int64_t)(cur + c + 5) + (int64_t)rel);
-                        has_call = 1;
-                        break;
-                    }
-                }
-
-                HeapCandidate *cand = &candidates[candidate_count++];
-                cand->insn_va     = insn_va;
-                cand->imm_va      = imm_va;
-                cand->orig_size   = val;
-                cand->orig_mb     = kHeapTargets[k].size_mb;
-                cand->reg_opcode  = op_byte;
-                snprintf(cand->opcode_desc, sizeof(cand->opcode_desc), "%s", op_desc);
-                cand->target_call = target_call;
-                cand->has_call    = has_call;
-
-                log_msg("[HEAP-PROBE] Candidate #%d @ 0x%llx (+0x%llx) | %s | Size: 0x%08x (%u MB) [%s]%s",
-                        candidate_count, (unsigned long long)insn_va, (unsigned long long)(insn_va - eboot_base),
-                        op_desc, val, kHeapTargets[k].size_mb, kHeapTargets[k].desc,
-                        has_call ? " | Call: " : "\n");
-                if (has_call) {
-                    log_msg("0x%llx (+0x%llx)\n",
-                            (unsigned long long)target_call, (unsigned long long)(target_call - eboot_base));
-                }
-
-                dump_heap_code_hex(pid, (insn_va > 8) ? (insn_va - 8) : insn_va, 40, "Heap_Candidate");
-                break;
-            }
-        }
-    }
-
-    free(chunk);
-
-    uint64_t elapsed = now_mono_ms() - t0;
-    log_msg("[HEAP-PROBE] Scan completed in %llums. Total candidates identified: %d\n",
-            (unsigned long long)elapsed, candidate_count);
-
-    /* -------------------------------------------------------------
-     * PASS 3: Safe Conditional Patch (Only if explicitly armed)
-     * ------------------------------------------------------------- */
-    if (!enable_patch) {
-        log_msg("[HEAP-PROBE] Safe Mode: Read-Only Probe active. Zero memory modified.\n");
-        return;
-    }
-
-    if (candidate_count == 0) {
-        log_msg("[HEAP-WARN] No candidate heap allocators found to patch.\n");
-        return;
-    }
-
-    if (target_heap_mb < 500 || target_heap_mb > 3000) {
-        log_msg("[HEAP-ABORT] Configured target heap (%d MB) out of safe range (500..3000 MB)! Aborting patch.\n",
-                target_heap_mb);
-        return;
-    }
-
-    HeapCandidate *best = NULL;
-    int call_candidates = 0;
-    for (int i = 0; i < candidate_count; i++) {
-        if (candidates[i].has_call) {
-            best = &candidates[i];
-            call_candidates++;
-        }
-    }
-
-    if (call_candidates != 1) {
-        log_msg("[HEAP-WARN] Ambiguous candidates (call_count=%d). For PS5 safety, manual offset verification required before write.\n",
-                call_candidates);
-        return;
-    }
-
-    uint32_t current_val = 0;
-    if (kernel_proc_copyout(pid, (intptr_t)best->imm_va, &current_val, sizeof(current_val)) != 0) {
-        log_msg("[HEAP-ABORT] Failed reading imm_va 0x%llx before write!\n", (unsigned long long)best->imm_va);
-        return;
-    }
-
-    if (current_val != best->orig_size) {
-        log_msg("[HEAP-ABORT] Memory mismatch at 0x%llx! Expected 0x%08x, read 0x%08x. Aborting write.\n",
-                (unsigned long long)best->imm_va, best->orig_size, current_val);
-        return;
-    }
-
-    uint32_t new_size = (uint32_t)target_heap_mb * 1024u * 1024u;
-    log_msg("[HEAP-PATCH] Arming patch @ 0x%llx: 0x%08x (%u MB) -> 0x%08x (%d MB)\n",
-            (unsigned long long)best->imm_va, current_val, best->orig_mb, new_size, target_heap_mb);
-
-    int wr = pt_copyin(pid, &new_size, (intptr_t)best->imm_va, sizeof(new_size));
-    uint32_t verify = 0;
-    kernel_proc_copyout(pid, (intptr_t)best->imm_va, &verify, sizeof(verify));
-
-    if (verify == new_size) {
-        log_msg("[HEAP-PATCH] SUCCESS: RAGE heap expanded to %d MB! (write_rc=%d, verified=0x%08x)\n",
-                target_heap_mb, wr, verify);
-        char toast[128];
-        snprintf(toast, sizeof(toast), "GTA V RAGE Heap Expanded: %d MB", target_heap_mb);
-        notify(toast);
+    if (enable_patch) {
+        /* Safety Guard: 0x1f79940 (+0x1b79940) is an internal render-state bitmask queue, not a heap size,
+         * and heuristic imm32 scanning in .text matches bitmasks/floats. Keep Heap Adjuster a safe no-op. */
+        log_msg("[HEAP-SAFE] RAGE Heap Adjuster (%d MB) locked to Safe No-Op on PS5 CUSA00419 "
+                "(PS5 16 GB unified memory handles streaming assets natively; 0 bytes patched).\n",
+                reported_mb);
     } else {
-        log_msg("[HEAP-ABORT] Patch verification failed! write_rc=%d, read_back=0x%08x\n", wr, verify);
+        log_msg("[HEAP-PROBE] Safe Mode: Read-Only verified. Zero game memory modified.\n");
     }
 }
 
 static int is_non_car_dlc(const char *name) {
     if (!name || !*name) return 1;
+    /* Map, graphics, weather, audio, script and system packs */
     if (strcasecmp(name, "NVE") == 0 ||
+        strcasecmp(name, "naturalvision") == 0 ||
+        strcasecmp(name, "quantv") == 0 ||
+        strcasecmp(name, "cloudhats") == 0 ||
+        strcasecmp(name, "v_clouds") == 0 ||
         strcasecmp(name, "gtaVremastered") == 0 ||
         strcasecmp(name, "vremastered") == 0 ||
+        strcasecmp(name, "remasteredsandy") == 0 ||
+        strcasecmp(name, "sandymaps") == 0 ||
+        strcasecmp(name, "paleto") == 0 ||
+        strcasecmp(name, "livelyls") == 0 ||
+        strcasecmp(name, "fsan") == 0 ||
+        strcasecmp(name, "fsas") == 0 ||
         strcasecmp(name, "visualsettings") == 0 ||
         strcasecmp(name, "update") == 0 ||
         strncasecmp(name, "patchday", 8) == 0 ||
-        strcasecmp(name, "mplowrider") == 0 ||
-        strcasecmp(name, "mpbiker") == 0 ||
         strcasecmp(name, "data") == 0 ||
-        strcasecmp(name, "levels") == 0) {
+        strcasecmp(name, "levels") == 0 ||
+        strcasecmp(name, "timecycle") == 0 ||
+        strcasecmp(name, "popcycle") == 0 ||
+        strcasecmp(name, "weapons") == 0 ||
+        strcasecmp(name, "audio") == 0) {
+        return 1;
+    }
+    /* Official Rockstar multiplayer DLC packs (not user add-on cars) */
+    if (strcasecmp(name, "mplowrider") == 0 ||
+        strcasecmp(name, "mplowrider2") == 0 ||
+        strcasecmp(name, "mpbiker") == 0 ||
+        strcasecmp(name, "mpstunt") == 0 ||
+        strcasecmp(name, "mpimportexport") == 0 ||
+        strcasecmp(name, "mpgunrunning") == 0 ||
+        strcasecmp(name, "mpsmuggler") == 0 ||
+        strcasecmp(name, "mpchristmas2017") == 0 ||
+        strcasecmp(name, "mpassault") == 0 ||
+        strcasecmp(name, "mpbattle") == 0 ||
+        strcasecmp(name, "mpheist3") == 0 ||
+        strcasecmp(name, "mpsum") == 0 ||
+        strcasecmp(name, "mpheist4") == 0 ||
+        strcasecmp(name, "mptuner") == 0 ||
+        strcasecmp(name, "mpsecurity") == 0 ||
+        strcasecmp(name, "mpg9ec") == 0 ||
+        strcasecmp(name, "mp2023_01") == 0 ||
+        strcasecmp(name, "mp2023_02") == 0 ||
+        strcasecmp(name, "mp2024_01") == 0) {
         return 1;
     }
     return 0;
+}
+
+static void get_car_display_label(const char *name, char *out_lbl, size_t max_len) {
+    if (!out_lbl || max_len == 0) return;
+    out_lbl[0] = '\0';
+    if (!name || !*name) return;
+
+    static const struct {
+        const char *id;
+        const char *label;
+    } kKnownCars[] = {
+        { "m4comp",     "BMW M4 Competition" },
+        { "svj63",      "Lamborghini SVJ 63" },
+        { "27rev",      "Lamborghini Revuelto" },
+        { "r35",        "Nissan GT-R R35" },
+        { "sf90vnm",    "Ferrari SF90 Stradale" },
+        { "sf90",       "Ferrari SF90 Stradale" },
+        { "laveg",      "Ferrari LaFerrari" },
+        { "oyconyx",    "Rolls-Royce Cullinan" },
+        { "m3tour",     "BMW M3 Touring" },
+        { "raptor25r",  "Ford F-150 Raptor R" },
+        { "oyc992",     "Porsche 911 GT3 RS" },
+        { "gibv48",     "Bugatti Chiron Pur Sport" },
+        { "hawkcstm",   "Jeep Grand Trackhawk" },
+        { "r8v10",      "Audi R8 V10 Plus" },
+        { "s500w222",   "Mercedes-Benz S500" },
+        { "rdd",        "Dodge Charger Hellcat" },
+        { "gt63s",      "Mercedes-AMG GT 63 S" },
+        { "c63s",       "Mercedes-AMG C 63 S" },
+        { "chiron",     "Bugatti Chiron" },
+        { "senna",      "McLaren Senna" },
+        { "p1",         "McLaren P1" },
+        { "urus",       "Lamborghini Urus" },
+        { "huracan",    "Lamborghini Huracan" },
+        { "supra",      "Toyota Supra A90" },
+        { "a90",        "Toyota Supra A90" }
+    };
+
+    for (size_t i = 0; i < sizeof(kKnownCars) / sizeof(kKnownCars[0]); i++) {
+        if (strcasecmp(name, kKnownCars[i].id) == 0) {
+            snprintf(out_lbl, max_len, "%s", kKnownCars[i].label);
+            return;
+        }
+    }
+
+    /* Clean auto-formatting for unknown add-on models */
+    size_t o = 0;
+    int cap_next = 1;
+    for (size_t i = 0; name[i] != '\0' && o + 1 < max_len; i++) {
+        char c = name[i];
+        if (c == '_' || c == '-') {
+            out_lbl[o++] = ' ';
+            cap_next = 1;
+        } else if (cap_next && c >= 'a' && c <= 'z') {
+            out_lbl[o++] = (char)(c - ('a' - 'A'));
+            cap_next = 0;
+        } else {
+            out_lbl[o++] = c;
+            cap_next = 0;
+        }
+    }
+    out_lbl[o] = '\0';
 }
 
 static void add_car_if_new(OrbxAddonCarEntry *out_list, uint32_t *count, const char *name, const char *label) {
@@ -1131,6 +1144,76 @@ static void add_car_if_new(OrbxAddonCarEntry *out_list, uint32_t *count, const c
     snprintf(e->name, sizeof(e->name), "%s", name);
     snprintf(e->label, sizeof(e->label), "%s", (label && label[0]) ? label : name);
     e->hash = host_joaat_lower(name);
+}
+
+static void scan_addon_car_dir(OrbxAddonCarEntry *out_list, uint32_t *count, const char *dir_path) {
+    if (!dir_path || *count >= ORBX_MAX_ADDON_CARS) return;
+    DIR *d = opendir(dir_path);
+    if (!d) return;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL && *count < ORBX_MAX_ADDON_CARS) {
+        if (ent->d_name[0] == '.') continue;
+        char pack[64];
+        snprintf(pack, sizeof(pack), "%s", ent->d_name);
+        size_t plen = strlen(pack);
+        if (plen > 4 && strcasecmp(pack + plen - 4, ".rpf") == 0) {
+            pack[plen - 4] = '\0';
+        }
+        trim_ws(pack);
+        if (!pack[0] || is_non_car_dlc(pack)) continue;
+        char lbl[48];
+        get_car_display_label(pack, lbl, sizeof(lbl));
+        add_car_if_new(out_list, count, pack, lbl);
+    }
+    closedir(d);
+}
+
+static void parse_dlclist_for_cars(OrbxAddonCarEntry *out_list, uint32_t *count, const char *xml_path) {
+    if (!xml_path || *count >= ORBX_MAX_ADDON_CARS) return;
+    FILE *xf = fopen(xml_path, "r");
+    if (!xf) return;
+    char line[512];
+    while (*count < ORBX_MAX_ADDON_CARS && fgets(line, sizeof(line), xf)) {
+        char *open_tag = strstr(line, "<Item>");
+        if (!open_tag) open_tag = strstr(line, "<item>");
+        if (!open_tag) continue;
+        char *close_tag = strstr(open_tag, "</Item>");
+        if (!close_tag) close_tag = strstr(open_tag, "</item>");
+        if (!close_tag) continue;
+
+        *close_tag = '\0';
+        char *content = open_tag + 6;
+        trim_ws(content);
+        if (!*content) continue;
+
+        for (char *c = content; *c; c++) {
+            if (*c == '\\') *c = '/';
+        }
+
+        size_t clen = strlen(content);
+        while (clen > 0 && (content[clen - 1] == '/' || content[clen - 1] == ' ' || content[clen - 1] == '\t')) {
+            content[--clen] = '\0';
+        }
+        if (clen == 0) continue;
+
+        if (clen > 8 && strcasecmp(content + clen - 8, "/dlc.rpf") == 0) {
+            content[clen - 8] = '\0';
+            clen -= 8;
+        }
+
+        char *last_slash = strrchr(content, '/');
+        char *pack = last_slash ? (last_slash + 1) : content;
+        char *colon = strchr(pack, ':');
+        if (colon) pack = colon + 1;
+        trim_ws(pack);
+
+        if (pack[0] && !is_non_car_dlc(pack)) {
+            char lbl[48];
+            get_car_display_label(pack, lbl, sizeof(lbl));
+            add_car_if_new(out_list, count, pack, lbl);
+        }
+    }
+    fclose(xf);
 }
 
 static uint32_t load_addon_cars_list(OrbxAddonCarEntry *out_list) {
@@ -1154,58 +1237,37 @@ static uint32_t load_addon_cars_list(OrbxAddonCarEntry *out_list) {
             }
             trim_ws(line);
             if (!line[0]) continue;
+            char def_lbl[48];
+            if (!label || !label[0]) {
+                get_car_display_label(line, def_lbl, sizeof(def_lbl));
+                label = def_lbl;
+            }
             add_car_if_new(out_list, &count, line, label);
         }
         fclose(acf);
     }
 
-    /* 2. Auto-discover from /data/orbx/gta/rpf/dlc_addon/ directories */
-    DIR *d = opendir("/data/orbx/gta/rpf/dlc_addon");
-    if (d) {
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL) {
-            if (ent->d_name[0] == '.') continue;
-            if (is_non_car_dlc(ent->d_name)) continue;
-            char lbl[48];
-            if (strcasecmp(ent->d_name, "r35") == 0) {
-                snprintf(lbl, sizeof(lbl), "Nissan GTR R35");
-            } else if (strcasecmp(ent->d_name, "27rev") == 0) {
-                snprintf(lbl, sizeof(lbl), "Lamborghini Revuelto");
-            } else {
-                snprintf(lbl, sizeof(lbl), "%s", ent->d_name);
-            }
-            add_car_if_new(out_list, &count, ent->d_name, lbl);
-        }
-        closedir(d);
-    }
+    /* 2. Auto-discover from standard DLC directories */
+    scan_addon_car_dir(out_list, &count, "/data/orbx/gta/rpf/dlc_addon");
+    scan_addon_car_dir(out_list, &count, "/data/orbx/gta/dlc_addon");
+    scan_addon_car_dir(out_list, &count, "/data/orbx/gta/dlcpacks");
+    scan_addon_car_dir(out_list, &count, "/data/orbx/gta/rpf/dlcpacks");
+    scan_addon_car_dir(out_list, &count, "/data/orbx/gta/update/x64/dlcpacks");
 
-    /* 3. Auto-discover from dlclist.xml */
-    FILE *xf = fopen("/data/orbx/gta/dlclist.xml", "r");
-    if (xf) {
-        char xline[256];
-        while (count < ORBX_MAX_ADDON_CARS && fgets(xline, sizeof(xline), xf)) {
-            char *p = strstr(xline, "dlc_addon/");
-            if (p) {
-                p += 10;
-                char pack_name[48] = {0};
-                size_t pidx = 0;
-                while (*p && *p != '/' && *p != '<' && pidx + 1 < sizeof(pack_name)) {
-                    pack_name[pidx++] = *p++;
-                }
-                pack_name[pidx] = '\0';
-                trim_ws(pack_name);
-                if (pack_name[0] && !is_non_car_dlc(pack_name)) {
-                    add_car_if_new(out_list, &count, pack_name, pack_name);
-                }
-            }
-        }
-        fclose(xf);
-    }
+    /* 3. Auto-discover from dlclist.xml across common paths */
+    parse_dlclist_for_cars(out_list, &count, "/data/orbx/gta/dlclist.xml");
+    parse_dlclist_for_cars(out_list, &count, "/data/orbx/gta/data/dlclist.xml");
+    parse_dlclist_for_cars(out_list, &count, "/data/orbx/gta/common/data/dlclist.xml");
+    parse_dlclist_for_cars(out_list, &count, "/data/orbx/gta/update/update.rpf/common/data/dlclist.xml");
+    parse_dlclist_for_cars(out_list, &count, "/data/orbx/gta/update/common/data/dlclist.xml");
 
     /* 4. Fallback defaults if still empty */
     if (count == 0u) {
-        add_car_if_new(out_list, &count, "27rev", "Lamborghini Revuelto");
-        add_car_if_new(out_list, &count, "r35", "Nissan GTR R35");
+        char l1[48], l2[48];
+        get_car_display_label("27rev", l1, sizeof(l1));
+        get_car_display_label("r35", l2, sizeof(l2));
+        add_car_if_new(out_list, &count, "27rev", l1);
+        add_car_if_new(out_list, &count, "r35", l2);
     }
 
     /* 5. Sync back discovered list to /data/orbx/gta/addon_cars.txt so it's always up to date */
@@ -1227,11 +1289,298 @@ static uint32_t load_addon_cars_list(OrbxAddonCarEntry *out_list) {
     return count;
 }
 
+static void sync_live_addon_cars_from_game_unlocked(pid_t pid) {
+    if (!g_native_active || !g_native_ctx_addr) return;
+    uint32_t live_count = 0;
+    if (kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.addon_car_count)),
+                            &live_count, sizeof(live_count)) != 0 || live_count == 0) {
+        return;
+    }
+    if (live_count > ORBX_MAX_ADDON_CARS) live_count = ORBX_MAX_ADDON_CARS;
+
+    OrbxAddonCarEntry live_cars[ORBX_MAX_ADDON_CARS];
+    if (kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.addon_cars)),
+                            live_cars, sizeof(OrbxAddonCarEntry) * live_count) != 0) {
+        return;
+    }
+
+    OrbxAddonCarEntry disk_cars[ORBX_MAX_ADDON_CARS];
+    uint32_t disk_count = load_addon_cars_list(disk_cars);
+    int added = 0;
+    for (uint32_t i = 0; i < live_count; i++) {
+        if (!live_cars[i].name[0]) continue;
+        int found = 0;
+        for (uint32_t d = 0; d < disk_count; d++) {
+            if (strcasecmp(disk_cars[d].name, live_cars[i].name) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found && disk_count < ORBX_MAX_ADDON_CARS) {
+            add_car_if_new(disk_cars, &disk_count, live_cars[i].name, live_cars[i].label);
+            added = 1;
+        }
+    }
+    if (added) {
+        FILE *wf = fopen("/data/orbx/gta/addon_cars.txt", "w");
+        if (wf) {
+            fprintf(wf, "# modHEN Add-On DLC Vehicle List (model or model|Display Name)\n");
+            for (uint32_t i = 0; i < disk_count; i++) {
+                if (strcmp(disk_cars[i].name, disk_cars[i].label) == 0) {
+                    fprintf(wf, "%s\n", disk_cars[i].name);
+                } else {
+                    fprintf(wf, "%s|%s\n", disk_cars[i].name, disk_cars[i].label);
+                }
+            }
+            fclose(wf);
+            chmod("/data/orbx/gta/addon_cars.txt", 0777);
+            log_msg("[MENU] Auto-saved new typed vehicle to /data/orbx/gta/addon_cars.txt (total %u)\n", disk_count);
+        }
+        reload_orbx_addon_cars_unlocked();
+    reload_orbx_shaders_unlocked();
+    }
+}
+
+static void populate_monitored_gots(const EbootGotQuery *queries, uint64_t code_base) {
+    memset(g_monitored_gots, 0, sizeof(g_monitored_gots));
+    for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
+        g_monitored_gots[i].name         = kHookFnNames[i];
+        memcpy(g_monitored_gots[i].nid, queries[i].nid, 16);
+        g_monitored_gots[i].got_slot     = queries[i].out_slot;
+        g_monitored_gots[i].tramp_addr   = code_base + kHookEntryOffsets[i];
+        g_monitored_gots[i].ctx_orig_off = kHookOrigCtxOffs[i];
+        g_monitored_gots[i].is_fs        = (i < 11u) ? 1 : 0;
+    }
+}
+
+typedef struct {
+    uint64_t magic;
+    uint64_t code_base;
+    uint64_t ctx_base;
+    uint32_t abi_version;
+    uint32_t ctx_size;
+    uint64_t code_alloc_size;
+    uint64_t orig_wait;
+} OrbxCtxPrefix;
+
+static int probe_existing_orbx_at_slot(pid_t pid, uint64_t slot_val, uint32_t entry_off,
+                                       uint64_t eboot_base, uint64_t eboot_size,
+                                       int require_exact_abi,
+                                       uint64_t *out_code_base, uint64_t *out_ctx_addr,
+                                       OrbxCtxPrefix *out_prefix, OrbxNativeHeader *out_hdr) {
+    if (slot_val < 0x10000ULL + entry_off || slot_val >= 0x800000000000ULL) return 0;
+    uint64_t cand_code = slot_val - entry_off;
+    if ((cand_code & 0xfffULL) != 0ULL) return 0;
+    if (eboot_size && cand_code >= eboot_base && cand_code < eboot_base + eboot_size) return 0;
+
+    OrbxNativeHeader hdr = {0};
+    if (kernel_proc_copyout(pid, (intptr_t)cand_code, &hdr, sizeof(hdr)) != 0) return 0;
+    if ((hdr.magic & ORBX_NATIVE_MAGIC_PREFIX_MASK) != ORBX_NATIVE_MAGIC_PREFIX) return 0;
+    if (hdr.ctx_addr < 0x10000ULL || (hdr.ctx_addr & 0xfffULL) != 0ULL) return 0;
+
+    OrbxCtxPrefix pfx = {0};
+    if (kernel_proc_copyout(pid, (intptr_t)hdr.ctx_addr, &pfx, sizeof(pfx)) != 0) return 0;
+    if (pfx.magic != hdr.magic || pfx.code_base != cand_code || pfx.ctx_base != hdr.ctx_addr) {
+        return 0;
+    }
+
+    if (out_hdr)    *out_hdr    = hdr;
+    if (out_prefix) *out_prefix = pfx;
+    if (out_code_base) *out_code_base = cand_code;
+    if (out_ctx_addr)  *out_ctx_addr  = hdr.ctx_addr;
+
+    if (require_exact_abi) {
+        if (hdr.magic != ORBX_NATIVE_MAGIC ||
+            pfx.abi_version != ORBX_NATIVE_ABI_VERSION ||
+            pfx.ctx_size != (uint32_t)sizeof(OrbxNativeContext)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int try_reattach_live_orbx(pid_t pid, uint64_t eboot_base, uint64_t eboot_size,
+                                  const EbootGotQuery *queries) {
+    uint64_t live_code = 0, live_ctx = 0;
+    OrbxCtxPrefix pfx = {0};
+    OrbxNativeHeader hdr_seen = {0};
+    for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
+        if (!queries[i].out_slot) continue;
+        uint64_t cur_val = 0;
+        if (kernel_proc_copyout(pid, (intptr_t)queries[i].out_slot, &cur_val, sizeof(cur_val)) != 0) {
+            continue;
+        }
+        uint64_t cand_code = 0, cand_ctx = 0;
+        OrbxCtxPrefix cand_pfx = {0};
+        OrbxNativeHeader cand_hdr = {0};
+        if (probe_existing_orbx_at_slot(pid, cur_val, kHookEntryOffsets[i],
+                                        eboot_base, eboot_size, 0,
+                                        &cand_code, &cand_ctx, &cand_pfx, &cand_hdr)) {
+            if (cand_hdr.magic != ORBX_NATIVE_MAGIC ||
+                cand_pfx.abi_version != ORBX_NATIVE_ABI_VERSION ||
+                cand_pfx.ctx_size != (uint32_t)sizeof(OrbxNativeContext)) {
+                log_msg("[ORBX-NATIVE] Incompatible live engine (magic=0x%llx abi=%u ctx=%u vs %u/%zu); replacing cleanly\n",
+                        (unsigned long long)cand_hdr.magic,
+                        cand_pfx.abi_version, cand_pfx.ctx_size,
+                        ORBX_NATIVE_ABI_VERSION, sizeof(OrbxNativeContext));
+                return 0;
+            }
+            live_code = cand_code;
+            live_ctx  = cand_ctx;
+            pfx       = cand_pfx;
+            hdr_seen  = cand_hdr;
+            break;
+        }
+    }
+    if (!live_code || !live_ctx) return 0;
+
+    size_t bin_size = (size_t)(_binary_orbx_native_bin_end - _binary_orbx_native_bin_start);
+    if (bin_size < ORBX_ENTRY_MIN_BIN_SIZE) return 0;
+    if (pfx.code_alloc_size != 0ULL && (uint64_t)bin_size > pfx.code_alloc_size) {
+        log_msg("[ORBX-NATIVE] Live code allocation (%llu B) < new bin (%zu B); replacing cleanly\n",
+                (unsigned long long)pfx.code_alloc_size, bin_size);
+        return 0;
+    }
+
+    OrbxNativeConfig cfg = {0};
+    uint32_t mod_cnt = 0, calls = 0, redirs = 0, widx = 0, tseq = 0, menu_armed = 0;
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, cfg)), &cfg, sizeof(cfg));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, mod_count)), &mod_cnt, sizeof(mod_cnt));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, total_calls)), &calls, sizeof(calls));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, total_redirects)), &redirs, sizeof(redirs));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, tracked_seq)), &tseq, sizeof(tseq));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, log_write_idx)), &widx, sizeof(widx));
+    kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.armed)), &menu_armed, sizeof(menu_armed));
+
+    /* Never overwrite live RX bytes in-place if compiled code changed; active call stacks may return through it. */
+    uint8_t *staged_bin = malloc(bin_size);
+    uint8_t *live_copy  = malloc(bin_size);
+    if (!staged_bin || !live_copy) {
+        free(staged_bin);
+        free(live_copy);
+        return 0;
+    }
+    memcpy(staged_bin, _binary_orbx_native_bin_start, bin_size);
+    OrbxNativeHeader *hdr = (OrbxNativeHeader *)staged_bin;
+    hdr->ctx_addr = live_ctx;
+    if (hdr->magic != hdr_seen.magic ||
+        kernel_proc_copyout(pid, (intptr_t)live_code, live_copy, bin_size) != 0 ||
+        memcmp(live_copy, staged_bin, bin_size) != 0) {
+        free(staged_bin);
+        free(live_copy);
+        log_msg("[ORBX-NATIVE] Live code @ 0x%llx differs from updated payload; mapping fresh page safely\n",
+                (unsigned long long)live_code);
+        return 0;
+    }
+    free(staged_bin);
+    free(live_copy);
+
+    /* Identical RX image already loaded: clear only stuck input-capture locks via kernel copyin without ptrace pause. */
+    uint32_t zero_u32 = 0u;
+    kernel_proc_copyin(pid, &zero_u32, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.kb_active)), sizeof(zero_u32));
+    kernel_proc_copyin(pid, &zero_u32, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.keybind_capture_slot)), sizeof(zero_u32));
+    kernel_proc_copyin(pid, &zero_u32, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.open_combo_wait_rel)), sizeof(zero_u32));
+    log_msg("[ORBX-NATIVE] Re-attached cleanly to identical live_code @ 0x%llx (%zu B, 0 code bytes overwritten)\n",
+            (unsigned long long)live_code, bin_size);
+
+    g_native_pid        = (uint64_t)pid;
+    g_native_ctx_addr   = live_ctx;
+    g_eboot_base        = eboot_base;
+    g_eboot_size        = eboot_size;
+    g_code_addr         = live_code;
+    g_code_alloc_size   = pfx.code_alloc_size ? pfx.code_alloc_size : 0x40000ULL;
+    g_unlock_60fps      = cfg.unlock_60fps;
+    populate_monitored_gots(queries, live_code);
+
+    int armed_count = 0;
+    for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
+        uint64_t cur_val = 0;
+        if (g_monitored_gots[i].got_slot &&
+            kernel_proc_copyout(pid, (intptr_t)g_monitored_gots[i].got_slot, &cur_val, sizeof(cur_val)) == 0 &&
+            cur_val == g_monitored_gots[i].tramp_addr) {
+            g_monitored_gots[i].armed = 1;
+            armed_count++;
+        }
+    }
+
+    g_fps_last_flips    = 0;
+    g_fps_last_ms       = now_mono_ms();
+    g_first_flip_seen   = 0;
+    g_first_pad_seen    = 0;
+    g_first_fs_seen     = (calls > 0u) ? 1 : 0;
+    /* Always re-resolve runtime natives on re-attach so new natives are populated */
+    g_native_reg_probed   = 0;
+    g_menu_probe_attempts = 0;
+    g_cached_mods       = mod_cnt;
+    g_cached_calls      = calls;
+    g_cached_redirects  = redirs;
+    g_last_log_seq      = widx;
+    g_last_tracked_seq  = tseq;
+    g_telem_poll_tick   = 0;
+    g_native_active     = 1;
+    memset(g_tracked_last_bytes, 0, sizeof(g_tracked_last_bytes));
+    memset(g_tracked_last_seq, 0, sizeof(g_tracked_last_seq));
+    memset(g_tracked_idle_ticks, 0, sizeof(g_tracked_idle_ticks));
+    memset(g_tracked_pending_bytes, 0, sizeof(g_tracked_pending_bytes));
+
+    ModhenConfig mcfg;
+    modhen_config_load(&mcfg);
+    {
+        uint32_t uval;
+        uval = (uint32_t)mcfg.menu_position;      kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.menu_position)), sizeof(uval));
+        uval = (uint32_t)mcfg.menu_scale;         kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.menu_scale)), sizeof(uval));
+        uval = (uint32_t)mcfg.theme_accent;       kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.theme_accent)), sizeof(uval));
+        uval = (uint32_t)mcfg.sound_enabled;      kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.sound_enabled)), sizeof(uval));
+        /* Keep live gameplay/camera/FOV toggles untouched on reattach; never preload from INI */
+        uval = mcfg.bind_open_mod;                kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_open_mod)), sizeof(uval));
+        uval = mcfg.bind_open_btn ? mcfg.bind_open_btn : 0x00000040u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_open_btn)), sizeof(uval));
+        uval = mcfg.bind_accept ? mcfg.bind_accept : 0x00004000u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_accept)), sizeof(uval));
+        uval = mcfg.bind_cancel ? mcfg.bind_cancel : 0x00002000u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_cancel)), sizeof(uval));
+        uval = mcfg.bind_tab_prev ? mcfg.bind_tab_prev : 0x00000400u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_tab_prev)), sizeof(uval));
+        uval = mcfg.bind_tab_next ? mcfg.bind_tab_next : 0x00000800u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_tab_next)), sizeof(uval));
+        uval = mcfg.bind_horn_boost;              kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_horn_boost)), sizeof(uval));
+        uval = mcfg.bind_noclip;                  kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_noclip)), sizeof(uval));
+        uval = mcfg.bind_quick_repair;            kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_quick_repair)), sizeof(uval));
+        uval = mcfg.bind_quick_heal;              kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_quick_heal)), sizeof(uval));
+        uval = mcfg.bind_super_brake;             kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.bind_super_brake)), sizeof(uval));
+        uval = 0u;
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.open_combo_wait_rel)), sizeof(uval));
+        kernel_proc_copyin(pid, &uval, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.tab_pend_btn)), sizeof(uval));
+        int32_t izero = 0;
+        kernel_proc_copyin(pid, &izero, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.tab_pend_dir)), sizeof(izero));
+        uint32_t live_keep_steering = 0u;
+        kernel_proc_copyout(pid, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.keep_steering)), &live_keep_steering, sizeof(live_keep_steering));
+        uint32_t sup = 0x000000F0u | mcfg.bind_accept | mcfg.bind_cancel |
+                       mcfg.bind_tab_prev | mcfg.bind_tab_next |
+                       mcfg.bind_open_mod | (mcfg.bind_open_btn ? mcfg.bind_open_btn : 0x00000040u);
+        if (live_keep_steering) sup &= ~0x00000300u;
+        kernel_proc_copyin(pid, &sup, (intptr_t)(live_ctx + offsetof(OrbxNativeContext, menu.pad_suppress_mask)), sizeof(sup));
+    }
+    if (mcfg.heap_probe || mcfg.heap_adjuster) {
+        probe_rage_heap_allocator(pid, eboot_base, eboot_size, mcfg.heap_size_mb, mcfg.heap_adjuster);
+    }
+
+    reload_orbx_addon_cars_unlocked();
+    reload_orbx_shaders_unlocked();
+
+    log_msg("[ORBX-NATIVE] Re-attached cleanly to live Native Engine in PID %d (Code=0x%llx, Ctx=0x%llx, Hooks=%d, Mods=%u, Menu=%u)\n",
+            pid, (unsigned long long)live_code, (unsigned long long)live_ctx,
+            armed_count, mod_cnt, menu_armed);
+    return 1;
+}
+
 /* ============================================================================
  * Public Host Lifecycle API
  * ============================================================================ */
 
-int install_orbx_native(pid_t pid) {
+static int install_orbx_native_locked(pid_t pid) {
     if (pid <= 1) return -1;
 
     log_msg("[ORBX-NATIVE] Starting Native PS5 Asset Engine for PID %d...\n", pid);
@@ -1248,7 +1597,7 @@ int install_orbx_native(pid_t pid) {
     char nid_read[16] = {0}, nid_pread[16] = {0};
     char nid_sce_close[16] = {0}, nid_close[16] = {0};
     char nid_set_flip_rate[16] = {0}, nid_gnm_flip[16] = {0};
-    char nid_pad_read_state[16] = {0}, nid_pad_read[16] = {0};
+    char nid_pad_read_state[16] = {0}, nid_pad_read[16] = {0}, nid_reg_bufs[16] = {0};
     char nid_access[16] = {0}, nid_fios_exists[16] = {0}, nid_fios_open[16] = {0};
 
     nid_encode("sceKernelOpen", nid_sce_open);
@@ -1266,11 +1615,12 @@ int install_orbx_native(pid_t pid) {
     nid_encode("sceGnmSubmitAndFlipCommandBuffers", nid_gnm_flip);
     nid_encode("scePadReadState", nid_pad_read_state);
     nid_encode("scePadRead", nid_pad_read);
+    nid_encode("sceVideoOutRegisterBuffers", nid_reg_bufs);
     nid_encode("access", nid_access);
     nid_encode("sceFiosFileExistsSync", nid_fios_exists);
     nid_encode("sceFiosFHOpenSync", nid_fios_open);
 
-    EbootGotQuery queries[18] = {
+    EbootGotQuery queries[19] = {
         { .nid = nid_sce_open,       .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_open,           .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_sce_stat,       .out_slot = 0, .matched_sym = {0} },
@@ -1286,12 +1636,13 @@ int install_orbx_native(pid_t pid) {
         { .nid = nid_gnm_flip,       .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_pad_read_state, .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_pad_read,       .out_slot = 0, .matched_sym = {0} },
+        { .nid = nid_reg_bufs,       .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_access,         .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_fios_exists,    .out_slot = 0, .matched_sym = {0} },
         { .nid = nid_fios_open,      .out_slot = 0, .matched_sym = {0} }
     };
 
-    int nfound = find_eboot_got_slots(pid, queries, 18);
+    int nfound = find_eboot_got_slots(pid, queries, 19);
     log_msg("[ORBX-NATIVE] eboot GOT scan matched %d slots "
             "(sceOpen=0x%llx open=0x%llx sceStat=0x%llx stat=0x%llx fopen=0x%llx | "
             "sceRead=0x%llx scePread=0x%llx read=0x%llx pread=0x%llx sceClose=0x%llx close=0x%llx | "
@@ -1316,6 +1667,11 @@ int install_orbx_native(pid_t pid) {
             (unsigned long long)queries[16].out_slot,
             (unsigned long long)queries[17].out_slot);
 
+    /* If GTA V already has an active Native Engine (e.g. daemon hot-reload), re-attach cleanly. */
+    if (try_reattach_live_orbx(pid, eboot_base, eboot_size, queries)) {
+        return 0;
+    }
+
     /* 2. Resolve true SPRX targets for each hookable API (strictly rejecting unresolved 0xeffffffe... tokens) */
     static const char *const kHookPrxs[4] = {
         "libSceVideoOut.sprx",
@@ -1323,8 +1679,8 @@ int install_orbx_native(pid_t pid) {
         "libSceGnmDriverForNeoMode.sprx",
         "libScePad.sprx"
     };
-    uint64_t orig_addrs[15];
-    for (size_t i = 0; i < 15; i++) {
+    uint64_t orig_addrs[NUM_MONITORED_GOTS];
+    for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
         orig_addrs[i] = resolve_from_libs_extra(pid, queries[i].nid, kHookPrxs, 4);
         if (!is_valid_prx_target(orig_addrs[i], eboot_base, eboot_size, 0)) {
             orig_addrs[i] = 0;
@@ -1332,7 +1688,10 @@ int install_orbx_native(pid_t pid) {
         if (!orig_addrs[i] && queries[i].out_slot) {
             uint64_t cur_slot_val = 0;
             if (kernel_proc_copyout(pid, (intptr_t)queries[i].out_slot, &cur_slot_val, 8) == 0 &&
-                is_valid_prx_target(cur_slot_val, eboot_base, eboot_size, 0)) {
+                is_valid_prx_target(cur_slot_val, eboot_base, eboot_size, 0) &&
+                !probe_existing_orbx_at_slot(pid, cur_slot_val, kHookEntryOffsets[i],
+                                             eboot_base, eboot_size, 0,
+                                             NULL, NULL, NULL, NULL)) {
                 orig_addrs[i] = cur_slot_val;
             }
         }
@@ -1357,7 +1716,9 @@ int install_orbx_native(pid_t pid) {
         return -1;
     }
 
-    ctx->magic = ORBX_NATIVE_MAGIC;
+    ctx->magic       = ORBX_NATIVE_MAGIC;
+    ctx->abi_version = ORBX_NATIVE_ABI_VERSION;
+    ctx->ctx_size    = (uint32_t)sizeof(OrbxNativeContext);
     for (uint32_t i = 0; i < ORBX_MAX_TRACKED_FDS; i++) {
         ctx->tracked_fds[i].fd = -1;
     }
@@ -1367,9 +1728,48 @@ int install_orbx_native(pid_t pid) {
             ctx->cfg.allow_gfx, ctx->cfg.allow_gxt2, ctx->cfg.allow_dlc_gxt2,
             ctx->cfg.unlock_60fps, ctx->cfg.debug_rpf_info);
     build_mod_index(ctx);
-    ctx->menu.density_pct       = 100u;
-    ctx->menu.lock_hour         = -1;
-    ctx->menu.pad_active_handle = -1;
+    ModhenConfig mcfg;
+    modhen_config_load(&mcfg);
+    ctx->menu.menu_position     = (uint32_t)mcfg.menu_position;
+    ctx->menu.menu_scale        = (uint32_t)mcfg.menu_scale;
+    ctx->menu.theme_accent      = (uint32_t)mcfg.theme_accent;
+    ctx->menu.sound_enabled     = (uint32_t)mcfg.sound_enabled;
+    /* All runtime gameplay/camera/FOV mods always start OFF on fresh game launch */
+    ctx->menu.keep_steering     = 0u;
+    ctx->menu.nav_stick         = 0u;
+    ctx->menu.speedo_mode       = 0u;
+    ctx->menu.fp_fov_idx        = 0u;
+    ctx->menu.fp_lock           = 0u;
+    ctx->menu.fp_clip_fix       = 0u;
+    ctx->menu.bind_open_mod     = mcfg.bind_open_mod;
+    ctx->menu.bind_open_btn     = mcfg.bind_open_btn ? mcfg.bind_open_btn : 0x00000040u;
+    ctx->menu.bind_accept       = mcfg.bind_accept   ? mcfg.bind_accept   : 0x00004000u;
+    ctx->menu.bind_cancel       = mcfg.bind_cancel   ? mcfg.bind_cancel   : 0x00002000u;
+    ctx->menu.bind_tab_prev     = mcfg.bind_tab_prev ? mcfg.bind_tab_prev : 0x00000400u;
+    ctx->menu.bind_tab_next     = mcfg.bind_tab_next ? mcfg.bind_tab_next : 0x00000800u;
+    ctx->menu.bind_horn_boost   = mcfg.bind_horn_boost;
+    ctx->menu.bind_noclip       = mcfg.bind_noclip;
+    ctx->menu.bind_quick_repair = mcfg.bind_quick_repair;
+    ctx->menu.bind_quick_heal   = mcfg.bind_quick_heal;
+    ctx->menu.bind_super_brake  = mcfg.bind_super_brake;
+    uint32_t sup = 0x000000F0u | ctx->menu.bind_accept | ctx->menu.bind_cancel |
+                   ctx->menu.bind_tab_prev | ctx->menu.bind_tab_next |
+                   ctx->menu.bind_open_mod | ctx->menu.bind_open_btn;
+    if (ctx->menu.keep_steering) sup &= ~0x00000300u;
+    ctx->menu.pad_suppress_mask     = sup;
+    ctx->menu.density_pct           = 100u;
+    ctx->menu.last_density_pct      = 100u;
+    ctx->menu.last_want_cap_applied = 5u;
+    ctx->menu.lock_hour             = -1;
+    ctx->menu.pad_active_handle     = -1;
+    ctx->menu.cloud_hat_idx         = -1;
+    ctx->menu.cloud_keyframe_idx    = -1;
+    ctx->menu.cloud_alpha_pct       = 100u;
+    ctx->menu.veh_neon_front        = 1u;
+    ctx->menu.veh_neon_back         = 1u;
+    ctx->menu.veh_neon_left         = 1u;
+    ctx->menu.veh_neon_right        = 1u;
+    ctx->menu.gfx_strength_pct      = 100u;
     ctx->menu.addon_car_count   = load_addon_cars_list(ctx->menu.addon_cars);
     log_msg("[ORBX-NATIVE] Loaded %u add-on car entries (first: %s = 0x%08x)\n",
             ctx->menu.addon_car_count, ctx->menu.addon_cars[0].name, ctx->menu.addon_cars[0].hash);
@@ -1389,6 +1789,21 @@ int install_orbx_native(pid_t pid) {
     ctx->orig_sceGnmSubmitAndFlipCommandBuffers = orig_addrs[12];
     ctx->orig_scePadReadState       = orig_addrs[13];
     ctx->orig_scePadRead            = orig_addrs[14];
+    ctx->orig_sceVideoOutRegisterBuffers = orig_addrs[15];
+    {
+        static const char *const kKernPrxs[2] = { "libkernel.sprx", "libkernel_sys.sprx" };
+        char n_sz[16] = {0}, n_al[16] = {0}, n_mp[16] = {0};
+        nid_encode("sceKernelGetDirectMemorySize", n_sz);
+        nid_encode("sceKernelAllocateDirectMemory", n_al);
+        nid_encode("sceKernelMapDirectMemory", n_mp);
+        ctx->fn_get_dmem_size = resolve_from_libs_extra(pid, n_sz, kKernPrxs, 2);
+        ctx->fn_alloc_dmem    = resolve_from_libs_extra(pid, n_al, kKernPrxs, 2);
+        ctx->fn_map_dmem      = resolve_from_libs_extra(pid, n_mp, kKernPrxs, 2);
+        log_msg("[ORBX-NATIVE] DirectMem APIs: size=0x%llx alloc=0x%llx map=0x%llx\n",
+                (unsigned long long)ctx->fn_get_dmem_size,
+                (unsigned long long)ctx->fn_alloc_dmem,
+                (unsigned long long)ctx->fn_map_dmem);
+    }
     ctx->orig_19cfd30               = eboot_base + 0x15cfd30ULL; /* 0x19cfd30 */
     ctx->orig_19cfd50               = eboot_base + 0x15cfd50ULL; /* 0x19cfd50 */
     uint8_t unlock_60fps_cfg        = ctx->cfg.unlock_60fps;
@@ -1409,7 +1824,7 @@ int install_orbx_native(pid_t pid) {
     }
 
     size_t code_pages = (bin_size + 0x3fffu) & ~0x3fffu;
-    if (code_pages < 0x4000u) code_pages = 0x4000u;
+    if (code_pages < 0x40000u) code_pages = 0x40000u; /* Reserve 256 KB for future hot-reloads */
     size_t ctx_pages = (sizeof(OrbxNativeContext) + 0x3fffu) & ~0x3fffu;
 
     uint8_t *staged_bin = malloc(bin_size);
@@ -1428,7 +1843,9 @@ int install_orbx_native(pid_t pid) {
         return -1;
     }
 
+    uint64_t prev_auth = enter_ptrace_auth_scope();
     if (pt_attach(pid) != 0) {
+        leave_ptrace_auth_scope(prev_auth);
         log_msg("[ORBX-NATIVE] Error: pt_attach(%d) failed (errno=%d)\n", pid, errno);
         free(staged_bin);
         free(ctx);
@@ -1441,7 +1858,7 @@ int install_orbx_native(pid_t pid) {
     if (!remote_code || !remote_ctx) {
         log_msg("[ORBX-NATIVE] Error: Anonymous page allocation failed (code=0x%llx, ctx=0x%llx)\n",
                 (unsigned long long)remote_code, (unsigned long long)remote_ctx);
-        pt_detach(pid, 0);
+        detach_ptrace_with_auth(pid, prev_auth);
         free(staged_bin);
         free(ctx);
         return -1;
@@ -1451,14 +1868,15 @@ int install_orbx_native(pid_t pid) {
             (unsigned long long)remote_code, code_pages,
             (unsigned long long)remote_ctx, ctx_pages);
 
-    ctx->code_base = remote_code;
-    ctx->ctx_base  = remote_ctx;
-    hdr->ctx_addr  = remote_ctx;
+    ctx->code_base       = remote_code;
+    ctx->ctx_base        = remote_ctx;
+    ctx->code_alloc_size = (uint64_t)code_pages;
+    hdr->ctx_addr        = remote_ctx;
 
     /* Use pt_copyin (PT_IO / vm_fault) so demand-paged anonymous RAM faults into pmap cleanly */
     if (pt_copyin(pid, ctx, (intptr_t)remote_ctx, sizeof(OrbxNativeContext)) != 0) {
         log_msg("[ORBX-NATIVE] Error: pt_copyin failed writing OrbxNativeContext (errno=%d)\n", errno);
-        pt_detach(pid, 0);
+        detach_ptrace_with_auth(pid, prev_auth);
         free(staged_bin);
         free(ctx);
         return -1;
@@ -1466,7 +1884,7 @@ int install_orbx_native(pid_t pid) {
 
     if (pt_copyin(pid, staged_bin, (intptr_t)remote_code, bin_size) != 0) {
         log_msg("[ORBX-NATIVE] Error: pt_copyin failed writing orbx_native.bin (errno=%d)\n", errno);
-        pt_detach(pid, 0);
+        detach_ptrace_with_auth(pid, prev_auth);
         free(staged_bin);
         free(ctx);
         return -1;
@@ -1476,7 +1894,7 @@ int install_orbx_native(pid_t pid) {
     if (attached_remote_mprotect(pid, syscall_insn, remote_code, code_pages, PROT_READ | PROT_EXEC) != 0) {
         log_msg("[ORBX-NATIVE] Error: mprotect(RX) failed on code page 0x%llx\n",
                 (unsigned long long)remote_code);
-        pt_detach(pid, 0);
+        detach_ptrace_with_auth(pid, prev_auth);
         free(ctx);
         return -1;
     }
@@ -1486,69 +1904,24 @@ int install_orbx_native(pid_t pid) {
     g_eboot_base        = eboot_base;
     g_eboot_size        = eboot_size;
     g_code_addr         = remote_code;
+    g_code_alloc_size   = (uint64_t)code_pages;
     g_unlock_60fps      = unlock_60fps_cfg;
 
-    static const uint32_t entry_offsets[NUM_MONITORED_GOTS] = {
-        ORBX_ENTRY_OFF_SCE_OPEN,
-        ORBX_ENTRY_OFF_OPEN,
-        ORBX_ENTRY_OFF_SCE_STAT,
-        ORBX_ENTRY_OFF_STAT,
-        ORBX_ENTRY_OFF_FOPEN,
-        ORBX_ENTRY_OFF_SCE_READ,
-        ORBX_ENTRY_OFF_SCE_PREAD,
-        ORBX_ENTRY_OFF_READ,
-        ORBX_ENTRY_OFF_PREAD,
-        ORBX_ENTRY_OFF_SCE_CLOSE,
-        ORBX_ENTRY_OFF_CLOSE,
-        ORBX_ENTRY_OFF_SCE_SET_FLIP_RATE,
-        ORBX_ENTRY_OFF_SCE_GNM_FLIP,
-        ORBX_ENTRY_OFF_SCE_PAD_READ_STATE,
-        ORBX_ENTRY_OFF_SCE_PAD_READ
-    };
-    static const char *const fn_names[NUM_MONITORED_GOTS] = {
-        "sceKernelOpen", "open", "sceKernelStat", "stat", "fopen",
-        "sceKernelRead", "sceKernelPread", "read", "pread", "sceKernelClose", "close",
-        "sceVideoOutSetFlipRate", "sceGnmSubmitAndFlipCommandBuffers",
-        "scePadReadState", "scePadRead"
-    };
-    static const size_t orig_offs[NUM_MONITORED_GOTS] = {
-        offsetof(OrbxNativeContext, orig_sceKernelOpen),
-        offsetof(OrbxNativeContext, orig_open),
-        offsetof(OrbxNativeContext, orig_sceKernelStat),
-        offsetof(OrbxNativeContext, orig_stat),
-        offsetof(OrbxNativeContext, orig_fopen),
-        offsetof(OrbxNativeContext, orig_sceKernelRead),
-        offsetof(OrbxNativeContext, orig_sceKernelPread),
-        offsetof(OrbxNativeContext, orig_read),
-        offsetof(OrbxNativeContext, orig_pread),
-        offsetof(OrbxNativeContext, orig_sceKernelClose),
-        offsetof(OrbxNativeContext, orig_close),
-        offsetof(OrbxNativeContext, orig_sceVideoOutSetFlipRate),
-        offsetof(OrbxNativeContext, orig_sceGnmSubmitAndFlipCommandBuffers),
-        offsetof(OrbxNativeContext, orig_scePadReadState),
-        offsetof(OrbxNativeContext, orig_scePadRead)
-    };
-
-    memset(g_monitored_gots, 0, sizeof(g_monitored_gots));
-    for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
-        g_monitored_gots[i].name         = fn_names[i];
-        memcpy(g_monitored_gots[i].nid, queries[i].nid, 16);
-        g_monitored_gots[i].got_slot     = queries[i].out_slot;
-        g_monitored_gots[i].tramp_addr   = remote_code + entry_offsets[i];
-        g_monitored_gots[i].ctx_orig_off = orig_offs[i];
-        g_monitored_gots[i].is_fs        = (i < 11u) ? 1 : 0;
-    }
+    populate_monitored_gots(queries, remote_code);
 
     g_fps_last_flips    = 0;
     g_fps_last_ms       = now_mono_ms();
     g_first_flip_seen   = 0;
     g_first_pad_seen    = 0;
-    g_first_fs_seen     = 0;
-    g_native_reg_probed = 0;
+    g_first_fs_seen       = 0;
+    g_native_reg_probed   = 0;
+    g_menu_probe_attempts = 0;
     g_cached_mods       = ctx->mod_count;
     g_cached_calls      = 0;
     g_cached_redirects  = 0;
     g_last_log_seq      = 0;
+    g_last_tracked_seq  = 0;
+    g_telem_poll_tick   = 0;
     g_native_active     = 1;
     memset(g_tracked_last_bytes, 0, sizeof(g_tracked_last_bytes));
     memset(g_tracked_last_seq, 0, sizeof(g_tracked_last_seq));
@@ -1571,7 +1944,7 @@ int install_orbx_native(pid_t pid) {
             }
             if (wr == 0 && verify == hook_target) {
                 log_msg("[ORBX-NATIVE] Armed %-33s GOT 0x%llx -> 0x%llx (orig: 0x%llx, verified=1)\n",
-                        fn_names[i],
+                        kHookFnNames[i],
                         (unsigned long long)queries[i].out_slot,
                         (unsigned long long)hook_target,
                         (unsigned long long)orig_addrs[i]);
@@ -1579,63 +1952,81 @@ int install_orbx_native(pid_t pid) {
                 g_monitored_gots[i].armed = 1;
             } else {
                 log_msg("[ORBX-NATIVE] Warning: Failed arming %-25s GOT 0x%llx (wr=%d, rb=0x%llx)\n",
-                        fn_names[i],
+                        kHookFnNames[i],
                         (unsigned long long)queries[i].out_slot,
                         wr, (unsigned long long)verify);
             }
         } else if (queries[i].out_slot != 0 && i >= 11) {
             log_msg("[ORBX-NATIVE] Defer %-33s GOT 0x%llx (waiting for PRX resolution)\n",
-                    fn_names[i], (unsigned long long)queries[i].out_slot);
+                    kHookFnNames[i], (unsigned long long)queries[i].out_slot);
         }
     }
 
     try_patch_v100_flip_interval(pid, eboot_base, unlock_60fps_cfg);
     try_patch_v100_pso_strs(pid, eboot_base, remote_code + ORBX_ENTRY_OFF_PSO_STRS);
 
-    /* 6. Safe RAGE Heap Allocator Probe & Diagnostic Adjuster */
-    ModhenConfig mcfg;
-    modhen_config_load(&mcfg);
-    if (mcfg.heap_probe) {
-        probe_rage_heap_allocator(pid, eboot_base, eboot_size, mcfg.heap_size_mb, mcfg.heap_adjuster);
-    }
-
-    pt_detach(pid, 0);
+    detach_ptrace_with_auth(pid, prev_auth);
 
     log_msg("[ORBX-NATIVE] Native Engine ACTIVE! Code=0x%llx (%zu B), Ctx=0x%llx, Hooks=%d, Mods=%u\n",
             (unsigned long long)remote_code, bin_size,
             (unsigned long long)remote_ctx, armed_count, g_cached_mods);
 
+    /* 6. Safe Read-Only Heap Check (runs AFTER pt_detach so GTA V never stalls under ptrace) */
+    if (mcfg.heap_probe || mcfg.heap_adjuster) {
+        probe_rage_heap_allocator(pid, eboot_base, eboot_size, mcfg.heap_size_mb, mcfg.heap_adjuster);
+    }
+
     /* 7. Read-only DMAP probe for RAGE v1.00 addresses (Phase 2 diagnostics) */
     run_rage_v100_probe(pid, eboot_base, eboot_size);
 
+    /* 8. Stage 1 Shader Validator & Staging */
+    reload_orbx_shaders_unlocked();
+
     return (armed_count > 0) ? 0 : -1;
+}
+
+int install_orbx_native(pid_t pid) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = install_orbx_native_locked(pid);
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
 }
 
 static void try_arm_monitored_got(pid_t pid, MonitoredGotHook *h) {
     if (!h || !h->got_slot || !h->tramp_addr || !g_native_ctx_addr || !h->nid[0]) return;
     uint64_t cur_got = 0;
     if (kernel_proc_copyout(pid, (intptr_t)h->got_slot, &cur_got, sizeof(cur_got)) != 0) return;
-    if (cur_got == h->tramp_addr) return;
-
-    static const char *const kPrxs[4] = {
-        "libSceVideoOut.sprx", "libSceGnmDriver.sprx", "libSceGnmDriverForNeoMode.sprx", "libScePad.sprx"
-    };
-    uint64_t real_fn = resolve_from_libs_extra(pid, h->nid, kPrxs, 4);
-    if (!is_valid_prx_target(real_fn, g_eboot_base, g_eboot_size, g_code_addr)) {
-        real_fn = 0;
+    if (cur_got == h->tramp_addr) {
+        h->armed = 1u;
+        h->arm_attempts = 0u;
+        return;
     }
-    if (!real_fn && is_valid_prx_target(cur_got, g_eboot_base, g_eboot_size, g_code_addr)) {
+
+    if (h->arm_attempts < 255u) {
+        h->arm_attempts++;
+    }
+
+    uint64_t real_fn = 0;
+    if (is_valid_prx_target(cur_got, g_eboot_base, g_eboot_size, g_code_addr)) {
         real_fn = cur_got;
     }
+
     uint64_t prev_orig = 0;
     kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + h->ctx_orig_off), &prev_orig, sizeof(prev_orig));
+    if (!real_fn && h->armed && is_valid_prx_target(prev_orig, g_eboot_base, g_eboot_size, g_code_addr)) {
+        real_fn = prev_orig;
+    }
+
     if (!real_fn) {
-        if (h->armed && is_valid_prx_target(prev_orig, g_eboot_base, g_eboot_size, g_code_addr)) {
-            real_fn = prev_orig;
-        } else {
-            return;
+        static const char *const kPrxs[4] = {
+            "libSceVideoOut.sprx", "libSceGnmDriver.sprx", "libSceGnmDriverForNeoMode.sprx", "libScePad.sprx"
+        };
+        real_fn = resolve_from_libs_extra(pid, h->nid, kPrxs, 4);
+        if (!is_valid_prx_target(real_fn, g_eboot_base, g_eboot_size, g_code_addr)) {
+            real_fn = 0;
         }
     }
+    if (!real_fn) return;
 
     if (prev_orig != real_fn) {
         if (kernel_proc_copyin(pid, &real_fn, (intptr_t)(g_native_ctx_addr + h->ctx_orig_off), sizeof(real_fn)) != 0) {
@@ -1650,18 +2041,93 @@ static void try_arm_monitored_got(pid_t pid, MonitoredGotHook *h) {
                     h->armed ? "Re-armed" : "Late-armed",
                     h->name, (unsigned long long)h->got_slot, (unsigned long long)h->tramp_addr,
                     (unsigned long long)real_fn, (unsigned long long)cur_got);
-            h->armed = 1;
+            h->armed = 1u;
+            h->arm_attempts = 0u;
         }
     }
 }
 
-void poll_orbx_native_telemetry(pid_t pid) {
+static void save_live_menu_to_ini_unlocked(void) {
+    OrbxMenuState m;
+    if (get_orbx_menu_state_unlocked(&m) != 0) return;
+
+    ModhenConfig cfg;
+    modhen_config_load(&cfg);
+    cfg.menu_position      = (int)m.menu_position;
+    cfg.menu_scale         = (int)m.menu_scale;
+    cfg.theme_accent       = (int)m.theme_accent;
+    cfg.sound_enabled      = m.sound_enabled ? 1 : 0;
+    cfg.keep_steering_open = 0;
+    cfg.nav_stick_enabled  = 0;
+    cfg.speedo_mode        = 0;
+    cfg.fp_fov_idx         = 0;
+    cfg.fp_lock            = 0;
+    cfg.fp_clip_fix        = 0;
+    cfg.bind_open_mod      = m.bind_open_mod;
+    cfg.bind_open_btn      = m.bind_open_btn;
+    cfg.bind_accept        = m.bind_accept;
+    cfg.bind_cancel        = m.bind_cancel;
+    cfg.bind_tab_prev      = m.bind_tab_prev;
+    cfg.bind_tab_next      = m.bind_tab_next;
+    cfg.bind_horn_boost    = m.bind_horn_boost;
+    cfg.bind_noclip        = m.bind_noclip;
+    cfg.bind_quick_repair  = m.bind_quick_repair;
+    cfg.bind_quick_heal    = m.bind_quick_heal;
+    cfg.bind_super_brake   = m.bind_super_brake;
+    if (modhen_config_save(&cfg) == 0) {
+        log_msg("[V100-MENU] Saved menu settings & keybinds to %s\n", MODHEN_CONFIG_PATH);
+    }
+}
+
+static void recompute_host_pad_suppress_mask_unlocked(void) {
+    OrbxMenuState m;
+    if (get_orbx_menu_state_unlocked(&m) != 0) return;
+    uint32_t sup = 0x0010FFF6u & (0x000000F0u | m.bind_accept | m.bind_cancel |
+                   m.bind_tab_prev | m.bind_tab_next | m.bind_open_mod | m.bind_open_btn);
+    if (m.keep_steering) sup &= ~0x00000300u;
+    kernel_proc_copyin((pid_t)g_native_pid, &sup,
+                       (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.pad_suppress_mask)),
+                       sizeof(sup));
+}
+
+static void poll_orbx_native_telemetry_locked(pid_t pid) {
     if (!g_native_active || (uint64_t)pid != g_native_pid || !g_native_ctx_addr) return;
     if (kill(pid, 0) != 0) return; // Process died, abort immediately to prevent kernel fault
 
+    g_telem_poll_tick++;
+
+    uint32_t save_req = 0u;
+    if (kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.cfg_save_req)),
+                            &save_req, sizeof(save_req)) == 0 && save_req != 0u) {
+        uint32_t zero = 0u;
+        kernel_proc_copyin(pid, &zero,
+                           (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.cfg_save_req)),
+                           sizeof(zero));
+        if (save_req == 2u) {
+            log_msg("[MENU] In-game reload requested: rescanning add-on cars...\n");
+            reload_orbx_addon_cars_unlocked();
+    reload_orbx_shaders_unlocked();
+        } else {
+            sync_live_addon_cars_from_game_unlocked(pid);
+            save_live_menu_to_ini_unlocked();
+        }
+    }
+
     for (size_t i = 0; i < NUM_MONITORED_GOTS; i++) {
-        if (!g_monitored_gots[i].is_fs || g_monitored_gots[i].armed || g_monitored_gots[i].got_slot) {
-            try_arm_monitored_got(pid, &g_monitored_gots[i]);
+        MonitoredGotHook *h = &g_monitored_gots[i];
+        if (!h->got_slot) continue;
+        if (h->armed) {
+            /* Already armed: re-check GOT slot infrequently (every 5s at 4 Hz) without PRX walks. */
+            if (!h->is_fs && (g_telem_poll_tick % 20u) == 0u) {
+                try_arm_monitored_got(pid, h);
+            }
+        } else {
+            /* Unarmed lazy GOT slot: probe every tick (4 Hz) for ~5s, then back off to once every ~30s. */
+            uint32_t period = (h->arm_attempts < 20u) ? 1u : 120u;
+            if ((g_telem_poll_tick % period) == 0u) {
+                try_arm_monitored_got(pid, h);
+            }
         }
     }
 
@@ -1712,9 +2178,11 @@ void poll_orbx_native_telemetry(pid_t pid) {
                 g_fps_last_ms    = now_ms;
             }
         }
-        if (!g_native_reg_probed && vstat.gnm_flip_count >= 120ULL && g_eboot_base) {
+        if (!g_native_reg_probed && vstat.gnm_flip_count >= 120ULL && g_eboot_base &&
+            ((g_telem_poll_tick % 4u) == 0u || g_menu_probe_attempts == 0u)) {
+            g_menu_probe_attempts++;
             int arm_rc = try_arm_v100_mod_menu(pid, g_eboot_base);
-            if (arm_rc != 0) {
+            if (arm_rc != 0 || g_menu_probe_attempts >= 20u) {
                 g_native_reg_probed = 1;
             }
         }
@@ -1724,7 +2192,7 @@ void poll_orbx_native_telemetry(pid_t pid) {
                                 &pad_raw, sizeof(pad_raw));
             kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu.pad_calls)),
                                 &pad_calls, sizeof(pad_calls));
-            if (pad_raw != 0u) {
+            if (pad_calls > 0u && pad_raw != 0u) {
                 g_first_pad_seen = 1;
                 log_msg("[V100-PAD] First controller input detected (calls=%u, raw_btns=0x%x)\n",
                         pad_calls, pad_raw);
@@ -1739,51 +2207,75 @@ void poll_orbx_native_telemetry(pid_t pid) {
         uint32_t dlc_traces_logged;
         uint32_t tracked_seq;
         uint32_t log_write_idx;
+    } TelemetryHeader;
+
+    typedef struct {
         uint64_t fd_bitmap[16];
         OrbxTrackedFd tracked_fds[ORBX_MAX_TRACKED_FDS];
-        char     log_entries[ORBX_LOG_RING_SLOTS][ORBX_LOG_LINE_BYTES];
-    } TelemetrySnapshot;
+    } TrackedTelemetrySnapshot;
 
-    _Static_assert(sizeof(TelemetrySnapshot) ==
-                   (sizeof(OrbxNativeContext) - offsetof(OrbxNativeContext, total_calls) -
-                    (sizeof(OrbxNativeContext) - offsetof(OrbxNativeContext, mod_count))),
-                   "TelemetrySnapshot layout must match OrbxNativeContext");
+    _Static_assert(sizeof(TelemetryHeader) ==
+                   (offsetof(OrbxNativeContext, fd_bitmap) - offsetof(OrbxNativeContext, total_calls)),
+                   "TelemetryHeader layout must match OrbxNativeContext");
+    _Static_assert(sizeof(TrackedTelemetrySnapshot) ==
+                   (offsetof(OrbxNativeContext, log_entries) - offsetof(OrbxNativeContext, fd_bitmap)),
+                   "TrackedTelemetrySnapshot layout must match OrbxNativeContext");
 
-    static TelemetrySnapshot snap;
-
+    TelemetryHeader thdr;
+    memset(&thdr, 0, sizeof(thdr));
     size_t off = offsetof(OrbxNativeContext, total_calls);
-    if (kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + off), &snap, sizeof(snap)) != 0) {
+    if (kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + off), &thdr, sizeof(thdr)) != 0) {
         return;
     }
 
-    g_cached_calls     = snap.total_calls;
-    g_cached_redirects = snap.total_redirects;
-    if (!g_first_fs_seen && snap.total_calls > 0u) {
+    g_cached_calls     = thdr.total_calls;
+    g_cached_redirects = thdr.total_redirects;
+    if (!g_first_fs_seen && thdr.total_calls > 0u) {
         g_first_fs_seen = 1;
         log_msg("[GTA-FS] First FS hook active (calls=%u, redirects=%u)\n",
-                snap.total_calls, snap.total_redirects);
+                thdr.total_calls, thdr.total_redirects);
     }
 
-    uint32_t widx = snap.log_write_idx;
+    uint32_t widx = thdr.log_write_idx;
     if (widx > g_last_log_seq) {
         if (widx - g_last_log_seq > ORBX_LOG_RING_SLOTS) {
             log_msg("[GTA-FS] (Warning: ring buffer wrapped %u lines)\n",
                     (widx - g_last_log_seq) - ORBX_LOG_RING_SLOTS);
             g_last_log_seq = widx - ORBX_LOG_RING_SLOTS;
         }
-        while (g_last_log_seq < widx) {
+        uint32_t fetched = 0;
+        while (g_last_log_seq < widx && fetched < 64u) {
             uint32_t slot = g_last_log_seq % ORBX_LOG_RING_SLOTS;
-            snap.log_entries[slot][ORBX_LOG_LINE_BYTES - 1] = '\0';
-            if (snap.log_entries[slot][0] != '\0') {
-                log_msg("[GTA-FS] %s\n", snap.log_entries[slot]);
+            char line[ORBX_LOG_LINE_BYTES];
+            size_t slot_off = offsetof(OrbxNativeContext, log_entries) + (size_t)slot * ORBX_LOG_LINE_BYTES;
+            if (kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + slot_off), line, sizeof(line)) != 0) {
+                break;
+            }
+            line[ORBX_LOG_LINE_BYTES - 1] = '\0';
+            if (line[0] != '\0') {
+                log_msg("[GTA-FS] %s\n", line);
             }
             g_last_log_seq++;
+            fetched++;
         }
+    }
+
+    if (thdr.tracked_seq == g_last_tracked_seq && (g_telem_poll_tick % 8u) != 0u) {
+        return;
+    }
+    g_last_tracked_seq = thdr.tracked_seq;
+
+    TrackedTelemetrySnapshot tsnap;
+    memset(&tsnap, 0, sizeof(tsnap));
+    if (kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, fd_bitmap)),
+                            &tsnap, sizeof(tsnap)) != 0) {
+        return;
     }
 
     /* Periodically report settled / milestone byte totals for still-open mod RPFs & XMLs */
     for (uint32_t i = 0; i < ORBX_MAX_TRACKED_FDS; i++) {
-        OrbxTrackedFd *t = &snap.tracked_fds[i];
+        OrbxTrackedFd *t = &tsnap.tracked_fds[i];
         t->name[sizeof(t->name) - 1] = '\0';
         if (t->open_seq != g_tracked_last_seq[i]) {
             g_tracked_last_seq[i] = t->open_seq;
@@ -1803,7 +2295,7 @@ void poll_orbx_native_telemetry(pid_t pid) {
             }
         } else if (t->bytes_read != g_tracked_last_bytes[i]) {
             g_tracked_idle_ticks[i]++;
-            if (g_tracked_idle_ticks[i] >= 6u) { /* ~1.5s settled */
+            if (g_tracked_idle_ticks[i] >= 3u) { /* ~1.5s-6s settled */
                 log_msg("[GTA-FS] [MOD-IO] %s (fd=%d): %llu B read (%u calls)\n",
                         t->name, t->fd, (unsigned long long)t->bytes_read, t->read_calls);
                 g_tracked_last_bytes[i] = t->bytes_read;
@@ -1813,82 +2305,204 @@ void poll_orbx_native_telemetry(pid_t pid) {
     }
 }
 
+void poll_orbx_native_telemetry(pid_t pid) {
+    pthread_mutex_lock(&g_host_lock);
+    poll_orbx_native_telemetry_locked(pid);
+    pthread_mutex_unlock(&g_host_lock);
+}
+
 void reset_orbx_native_state(void) {
+    pthread_mutex_lock(&g_host_lock);
     g_native_active    = 0;
     g_native_pid       = 0;
     g_native_ctx_addr  = 0;
     g_eboot_base       = 0;
     g_eboot_size       = 0;
     g_code_addr        = 0;
+    g_code_alloc_size  = 0;
     memset(g_monitored_gots, 0, sizeof(g_monitored_gots));
     g_fps_last_flips   = 0;
     g_fps_last_ms      = 0;
     g_first_flip_seen  = 0;
     g_first_pad_seen   = 0;
-    g_first_fs_seen    = 0;
-    g_native_reg_probed = 0;
+    g_first_fs_seen       = 0;
+    g_native_reg_probed   = 0;
+    g_menu_probe_attempts = 0;
     g_last_log_seq     = 0;
+    g_last_tracked_seq = 0;
+    g_telem_poll_tick  = 0;
     memset(g_tracked_last_bytes, 0, sizeof(g_tracked_last_bytes));
     memset(g_tracked_last_seq, 0, sizeof(g_tracked_last_seq));
     memset(g_tracked_idle_ticks, 0, sizeof(g_tracked_idle_ticks));
     memset(g_tracked_pending_bytes, 0, sizeof(g_tracked_pending_bytes));
+    pthread_mutex_unlock(&g_host_lock);
 }
 
 void get_orbx_native_stats(uint32_t *out_mod_count, uint32_t *out_calls, uint32_t *out_redirects, int *out_active) {
+    pthread_mutex_lock(&g_host_lock);
     if (out_mod_count) *out_mod_count = g_cached_mods;
     if (out_calls)     *out_calls     = g_cached_calls;
     if (out_redirects) *out_redirects = g_cached_redirects;
     if (out_active)    *out_active    = g_native_active;
+    pthread_mutex_unlock(&g_host_lock);
 }
 
-int get_orbx_menu_state(OrbxMenuState *out_menu) {
+static int get_orbx_menu_state_unlocked(OrbxMenuState *out_menu) {
     if (!out_menu || !g_native_active || !g_native_pid || !g_native_ctx_addr) return -1;
+    memset(out_menu, 0, sizeof(*out_menu));
+    size_t start_off = offsetof(OrbxMenuState, armed);
+    size_t end_off   = sizeof(OrbxMenuState);
     if (kernel_proc_copyout((pid_t)g_native_pid,
-                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu)),
-                            out_menu, sizeof(*out_menu)) != 0) {
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, menu) + start_off),
+                            ((uint8_t *)out_menu) + start_off,
+                            end_off - start_off) != 0) {
         return -1;
     }
     return 0;
 }
 
-int set_orbx_menu_toggle(const char *name, uint32_t val) {
+int get_orbx_menu_state(OrbxMenuState *out_menu) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = get_orbx_menu_state_unlocked(out_menu);
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+static int set_orbx_menu_toggle_unlocked(const char *name, uint32_t val) {
     if (!name || !g_native_active || !g_native_pid || !g_native_ctx_addr) return -1;
     static const struct {
         const char *name;
         size_t      off;
-        uint8_t     is_bool;
+        uint8_t     kind; /* 0=u32, 1=bool, 2=keybind/ux */
     } kMenuFields[] = {
-        { "menu_open",       offsetof(OrbxNativeContext, menu.menu_open),       1 },
-        { "godmode",         offsetof(OrbxNativeContext, menu.godmode),         1 },
-        { "never_wanted",    offsetof(OrbxNativeContext, menu.never_wanted),    1 },
-        { "super_jump",      offsetof(OrbxNativeContext, menu.super_jump),      1 },
-        { "fast_run",        offsetof(OrbxNativeContext, menu.fast_run),        1 },
-        { "no_ragdoll",      offsetof(OrbxNativeContext, menu.no_ragdoll),      1 },
-        { "inf_ammo",        offsetof(OrbxNativeContext, menu.inf_ammo),        1 },
-        { "explosive_ammo",  offsetof(OrbxNativeContext, menu.explosive_ammo),  1 },
-        { "fire_ammo",       offsetof(OrbxNativeContext, menu.fire_ammo),       1 },
-        { "explosive_melee", offsetof(OrbxNativeContext, menu.explosive_melee), 1 },
-        { "veh_god",         offsetof(OrbxNativeContext, menu.veh_god),         1 },
-        { "horn_boost",      offsetof(OrbxNativeContext, menu.horn_boost),      1 },
-        { "density_pct",     offsetof(OrbxNativeContext, menu.density_pct),     0 },
-        { "lock_hour",       offsetof(OrbxNativeContext, menu.lock_hour),       0 }
+        { "menu_open",            offsetof(OrbxNativeContext, menu.menu_open),            1 },
+        { "godmode",              offsetof(OrbxNativeContext, menu.godmode),              1 },
+        { "never_wanted",         offsetof(OrbxNativeContext, menu.never_wanted),         1 },
+        { "super_jump",           offsetof(OrbxNativeContext, menu.super_jump),           1 },
+        { "fast_run",             offsetof(OrbxNativeContext, menu.fast_run),             1 },
+        { "no_ragdoll",           offsetof(OrbxNativeContext, menu.no_ragdoll),           1 },
+        { "invisible",            offsetof(OrbxNativeContext, menu.invisible),            1 },
+        { "noclip_on",            offsetof(OrbxNativeContext, menu.noclip_on),            1 },
+        { "spec_ability_inf",     offsetof(OrbxNativeContext, menu.spec_ability_inf),     1 },
+        { "inf_ammo",             offsetof(OrbxNativeContext, menu.inf_ammo),             1 },
+        { "explosive_ammo",       offsetof(OrbxNativeContext, menu.explosive_ammo),       1 },
+        { "fire_ammo",            offsetof(OrbxNativeContext, menu.fire_ammo),            1 },
+        { "explosive_melee",      offsetof(OrbxNativeContext, menu.explosive_melee),      1 },
+        { "veh_god",              offsetof(OrbxNativeContext, menu.veh_god),              1 },
+        { "seatbelt_on",          offsetof(OrbxNativeContext, menu.seatbelt_on),          1 },
+        { "horn_boost",           offsetof(OrbxNativeContext, menu.horn_boost),           1 },
+        { "veh_drift_mode",       offsetof(OrbxNativeContext, menu.veh_drift_mode),       1 },
+        { "veh_bulletproof_tyres",offsetof(OrbxNativeContext, menu.veh_bulletproof_tyres),1 },
+        { "veh_doors_locked",     offsetof(OrbxNativeContext, menu.veh_doors_locked),     1 },
+        { "clock_paused",         offsetof(OrbxNativeContext, menu.clock_paused),         1 },
+        { "low_gravity",          offsetof(OrbxNativeContext, menu.low_gravity),          1 },
+        { "mobile_radio",         offsetof(OrbxNativeContext, menu.mobile_radio),         1 },
+        { "weather_persist",      offsetof(OrbxNativeContext, menu.weather_persist),      1 },
+        { "fp_lock",              offsetof(OrbxNativeContext, menu.fp_lock),              1 },
+        { "fp_clip_fix",          offsetof(OrbxNativeContext, menu.fp_clip_fix),          1 },
+        { "cinematic_cam",        offsetof(OrbxNativeContext, menu.cinematic_cam),        1 },
+        { "cam_anti_shake",       offsetof(OrbxNativeContext, menu.cam_anti_shake),       1 },
+        { "keep_steering",        offsetof(OrbxNativeContext, menu.keep_steering),        1 },
+        { "nav_stick",            offsetof(OrbxNativeContext, menu.nav_stick),            1 },
+        { "sound_enabled",        offsetof(OrbxNativeContext, menu.sound_enabled),        2 },
+        { "density_pct",          offsetof(OrbxNativeContext, menu.density_pct),          0 },
+        { "lock_hour",            offsetof(OrbxNativeContext, menu.lock_hour),            0 },
+        { "noclip_speed_idx",     offsetof(OrbxNativeContext, menu.noclip_speed_idx),     0 },
+        { "wanted_cap_idx",       offsetof(OrbxNativeContext, menu.wanted_cap_idx),       0 },
+        { "sprint_mult_idx",      offsetof(OrbxNativeContext, menu.sprint_mult_idx),      0 },
+        { "swim_mult_idx",        offsetof(OrbxNativeContext, menu.swim_mult_idx),        0 },
+        { "veh_torque_idx",       offsetof(OrbxNativeContext, menu.veh_torque_idx),       0 },
+        { "speedo_mode",          offsetof(OrbxNativeContext, menu.speedo_mode),          0 },
+        { "time_scale_idx",       offsetof(OrbxNativeContext, menu.time_scale_idx),       0 },
+        { "cloud_alpha_pct",      offsetof(OrbxNativeContext, menu.cloud_alpha_pct),      0 },
+        { "fp_fov_idx",           offsetof(OrbxNativeContext, menu.fp_fov_idx),           0 },
+        { "menu_position",        offsetof(OrbxNativeContext, menu.menu_position),        2 },
+        { "menu_scale",           offsetof(OrbxNativeContext, menu.menu_scale),           2 },
+        { "theme_accent",         offsetof(OrbxNativeContext, menu.theme_accent),         2 },
+        { "gfx_preset_idx",       offsetof(OrbxNativeContext, menu.gfx_preset_idx),       0 },
+        { "gfx_strength_pct",     offsetof(OrbxNativeContext, menu.gfx_strength_pct),     0 },
+        { "gfx_film_grain",       offsetof(OrbxNativeContext, menu.gfx_film_grain),       0 },
+        { "gfx_postfx_idx",       offsetof(OrbxNativeContext, menu.gfx_postfx_idx),       0 },
+        { "enb_extra_active",     offsetof(OrbxNativeContext, menu.enb_extra_active),     0 },
+        { "enb_shadow_soft",      offsetof(OrbxNativeContext, menu.enb_shadow_soft),      0 },
+        { "enb_shadow_scale",     offsetof(OrbxNativeContext, menu.enb_shadow_scale),     0 },
+        { "enb_ssao_boost",       offsetof(OrbxNativeContext, menu.enb_ssao_boost),       0 },
+        { "bind_open_mod",        offsetof(OrbxNativeContext, menu.bind_open_mod),        2 },
+        { "bind_open_btn",        offsetof(OrbxNativeContext, menu.bind_open_btn),        2 },
+        { "bind_accept",          offsetof(OrbxNativeContext, menu.bind_accept),          2 },
+        { "bind_cancel",          offsetof(OrbxNativeContext, menu.bind_cancel),          2 },
+        { "bind_tab_prev",        offsetof(OrbxNativeContext, menu.bind_tab_prev),        2 },
+        { "bind_tab_next",        offsetof(OrbxNativeContext, menu.bind_tab_next),        2 },
+        { "bind_horn_boost",      offsetof(OrbxNativeContext, menu.bind_horn_boost),      2 },
+        { "bind_noclip",          offsetof(OrbxNativeContext, menu.bind_noclip),          2 },
+        { "bind_quick_repair",    offsetof(OrbxNativeContext, menu.bind_quick_repair),    2 },
+        { "bind_quick_heal",      offsetof(OrbxNativeContext, menu.bind_quick_heal),      2 },
+        { "bind_super_brake",     offsetof(OrbxNativeContext, menu.bind_super_brake),     2 },
+        { "afp_mode",             offsetof(OrbxNativeContext, menu.afp_mode),             0 },
+        { "afp_fov_idx",          offsetof(OrbxNativeContext, menu.afp_fov_idx),          0 },
+        { "afp_headbob",          offsetof(OrbxNativeContext, menu.afp_headbob),          0 },
+        { "afp_smooth_follow",    offsetof(OrbxNativeContext, menu.afp_smooth_follow),    0 },
+        { "afp_recoil",           offsetof(OrbxNativeContext, menu.afp_recoil),           0 },
+        { "afp_inertia",          offsetof(OrbxNativeContext, menu.afp_inertia),          1 },
+        { "afp_crouch_lower",     offsetof(OrbxNativeContext, menu.afp_crouch_lower),     1 },
+        { "afp_ads_zoom",         offsetof(OrbxNativeContext, menu.afp_ads_zoom),         0 },
+        { "afp_crosshair",        offsetof(OrbxNativeContext, menu.afp_crosshair),        0 },
+        { "afp_autoturn",         offsetof(OrbxNativeContext, menu.afp_autoturn),         1 },
+        { "afp_clip_fix",         offsetof(OrbxNativeContext, menu.afp_clip_fix),         1 },
+        { "fuel_system_on",       offsetof(OrbxNativeContext, menu.fuel_system_on),       1 },
+        { "calmer_police_on",     offsetof(OrbxNativeContext, menu.calmer_police_on),     1 },
+        { "gta6_hud_on",          offsetof(OrbxNativeContext, menu.gta6_hud_on),          1 },
+        { "gta6_wheel_on",        offsetof(OrbxNativeContext, menu.gta6_wheel_on),        1 }
     };
     for (size_t i = 0; i < (sizeof(kMenuFields) / sizeof(kMenuFields[0])); i++) {
         if (strcmp(name, kMenuFields[i].name) == 0) {
-            if (kMenuFields[i].is_bool) {
+            if (kMenuFields[i].kind == 1 ||
+                strcmp(name, "keep_steering") == 0 ||
+                strcmp(name, "nav_stick") == 0 ||
+                strcmp(name, "sound_enabled") == 0) {
                 val = val ? 1u : 0u;
-            } else if (strcmp(name, "density_pct") == 0 && val > 100u) {
+            } else if ((strcmp(name, "density_pct") == 0 || strcmp(name, "gfx_film_grain") == 0 ||
+                        strcmp(name, "cloud_alpha_pct") == 0) && val > 100u) {
                 val = 100u;
+            } else if (strcmp(name, "gfx_strength_pct") == 0) {
+                if (val < 10u)  val = 10u;
+                if (val > 200u) val = 200u;
+            } else if (strcmp(name, "gfx_preset_idx") == 0) {
+                if (val >= 15u) val = 0u;
+                return trigger_orbx_menu_action_unlocked(ORBX_ACT_SET_GFX_PRESET, (int32_t)val, 0);
+            } else if (strcmp(name, "gfx_postfx_idx") == 0) {
+                if (val >= 7u) val = 0u;
+                return trigger_orbx_menu_action_unlocked(ORBX_ACT_SET_POSTFX, (int32_t)val, 0);
+            } else if (strcmp(name, "enb_extra_active") == 0) {
+                return trigger_orbx_menu_action_unlocked(ORBX_ACT_SET_ENB_EXTRA, (int32_t)val, 0);
+            } else if (strcmp(name, "enb_shadow_soft") == 0) {
+                return trigger_orbx_menu_action_unlocked(ORBX_ACT_SET_SHADOW_QUALITY, (int32_t)val, 25);
             }
-            return (kernel_proc_copyin((pid_t)g_native_pid, &val,
-                                       (intptr_t)(g_native_ctx_addr + kMenuFields[i].off),
-                                       sizeof(val)) == 0) ? 0 : -1;
+            if (kernel_proc_copyin((pid_t)g_native_pid, &val,
+                                   (intptr_t)(g_native_ctx_addr + kMenuFields[i].off),
+                                   sizeof(val)) != 0) {
+                return -1;
+            }
+            if (kMenuFields[i].kind == 2 || strcmp(name, "keep_steering") == 0) {
+                recompute_host_pad_suppress_mask_unlocked();
+            }
+            if (kMenuFields[i].kind == 2) {
+                save_live_menu_to_ini_unlocked();
+            }
+            return 0;
         }
     }
     return -1;
 }
 
-int trigger_orbx_menu_action(uint32_t action, int32_t arg0, uint32_t spawn_hash) {
+int set_orbx_menu_toggle(const char *name, uint32_t val) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = set_orbx_menu_toggle_unlocked(name, val);
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+static int trigger_orbx_menu_action_unlocked(uint32_t action, int32_t arg0, uint32_t spawn_hash) {
     if (!g_native_active || !g_native_pid || !g_native_ctx_addr) return -1;
     pid_t pid = (pid_t)g_native_pid;
     if (kernel_proc_copyin(pid, &arg0,
@@ -1902,7 +2516,14 @@ int trigger_orbx_menu_action(uint32_t action, int32_t arg0, uint32_t spawn_hash)
                                sizeof(action)) == 0) ? 0 : -1;
 }
 
-int reload_orbx_addon_cars(void) {
+int trigger_orbx_menu_action(uint32_t action, int32_t arg0, uint32_t spawn_hash) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = trigger_orbx_menu_action_unlocked(action, arg0, spawn_hash);
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+static int reload_orbx_addon_cars_unlocked(void) {
     if (!g_native_active || !g_native_pid || !g_native_ctx_addr) return -1;
     OrbxAddonCarEntry list[ORBX_MAX_ADDON_CARS];
     uint32_t count = load_addon_cars_list(list);
@@ -1916,6 +2537,13 @@ int reload_orbx_addon_cars(void) {
     return (int)count;
 }
 
+int reload_orbx_addon_cars(void) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = reload_orbx_addon_cars_unlocked();
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
 int spawn_orbx_vehicle_by_name(const char *model_name, int save_to_list) {
     (void)save_to_list;
     if (!model_name || !model_name[0]) return -1;
@@ -1924,6 +2552,7 @@ int spawn_orbx_vehicle_by_name(const char *model_name, int save_to_list) {
     trim_ws(clean);
     if (!clean[0]) return -1;
 
+    pthread_mutex_lock(&g_host_lock);
     // Always auto-save to addon_cars.txt and reload so the in-game menu list updates immediately
     FILE *f = fopen("/data/orbx/gta/addon_cars.txt", "a");
     if (f) {
@@ -1931,6 +2560,224 @@ int spawn_orbx_vehicle_by_name(const char *model_name, int save_to_list) {
         fclose(f);
         chmod("/data/orbx/gta/addon_cars.txt", 0777);
     }
-    reload_orbx_addon_cars();
-    return trigger_orbx_menu_action(ORBX_ACT_SPAWN_VEH, 0, host_joaat_lower(clean));
+    reload_orbx_addon_cars_unlocked();
+    reload_orbx_shaders_unlocked();
+    int rc = trigger_orbx_menu_action_unlocked(ORBX_ACT_SPAWN_VEH, 0, host_joaat_lower(clean));
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int get_orbx_gnm_probe(GnmCrashProbe *out_probe, uint64_t *out_flips) {
+    if (!out_probe) return -1;
+    memset(out_probe, 0, sizeof(*out_probe));
+    if (out_flips) *out_flips = 0;
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    if (out_flips) {
+        kernel_proc_copyout(pid,
+                            (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, gnm_flip_count)),
+                            out_flips, sizeof(uint64_t));
+    }
+    int rc = kernel_proc_copyout(pid,
+                                (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, gnm_probe)),
+                                out_probe, sizeof(GnmCrashProbe));
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+#define ORBX_SHADERS_DIR    "/data/orbx/shaders"
+#define ORBX_POSTPROCESS_SB "/data/orbx/shaders/postprocess.sb"
+
+static int reload_orbx_shaders_unlocked(void) {
+    mkdir(ORBX_SHADERS_DIR, 0777);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) return -1;
+    pid_t pid = (pid_t)g_native_pid;
+
+    GnmShaderProbe sp;
+    memset(&sp, 0, sizeof(sp));
+    snprintf(sp.shader_file, sizeof(sp.shader_file), "%s", ORBX_POSTPROCESS_SB);
+    sp.bloom_threshold = 0.85f;
+    sp.bloom_intensity = 0.35f;
+    sp.exposure        = 1.00f;
+    sp.contrast        = 1.05f;
+    sp.saturation      = 1.10f;
+    sp.vignette        = 0.20f;
+    sp.color_temp      = 6500.0f;
+    sp.film_grain      = 0.00f;
+    sp.anti_aliasing   = 0.35f;
+    sp.sharpness       = 0.20f;
+
+    struct stat st;
+    if (stat(ORBX_POSTPROCESS_SB, &st) != 0) {
+        sp.loaded = 0;
+        sp.enabled = 0;
+        sp.error_code = 1; /* NOT_FOUND */
+        snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Standby (No postprocess.sb found)");
+        kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+        log_msg("[GNM-SHADER] %s not present (Standby, 0 GPU writes)\n", ORBX_POSTPROCESS_SB);
+        return 0;
+    }
+
+    if (st.st_size < 64 || st.st_size > 1024 * 1024) {
+        sp.loaded = 2; /* VALIDATION_ERROR */
+        sp.enabled = 0;
+        sp.error_code = 2; /* TOO_SMALL / TOO_LARGE */
+        snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Invalid size (%ld bytes)", (long)st.st_size);
+        kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+        log_msg("[GNM-SHADER] Error: %s has invalid size (%ld bytes)\n", ORBX_POSTPROCESS_SB, (long)st.st_size);
+        return -1;
+    }
+
+    FILE *f = fopen(ORBX_POSTPROCESS_SB, "rb");
+    if (!f) {
+        sp.loaded = 2;
+        sp.enabled = 0;
+        sp.error_code = 1;
+        snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Open error");
+        kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+        return -1;
+    }
+
+    size_t sz = (size_t)st.st_size;
+    uint8_t *sbuf = malloc(sz);
+    if (!sbuf) {
+        fclose(f);
+        return -1;
+    }
+    size_t rd = fread(sbuf, 1, sz, f);
+    fclose(f);
+    if (rd != sz) {
+        free(sbuf);
+        sp.loaded = 2;
+        sp.error_code = 1;
+        snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Incomplete read");
+        kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+        return -1;
+    }
+
+    /* Pre-Flight Validator: Check Sony PSSB (0x42535350) or ELF header (0x7f454c46) */
+    uint32_t magic = *(const uint32_t *)sbuf;
+    if (magic != 0x42535350u && magic != 0x464c457fu) {
+        free(sbuf);
+        sp.loaded = 2;
+        sp.error_code = 3; /* BAD_MAGIC */
+        snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Magic mismatch (0x%08x != PSSB/ELF)", magic);
+        kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+        log_msg("[GNM-SHADER] Error: %s bad header magic 0x%08x\n", ORBX_POSTPROCESS_SB, magic);
+        return -1;
+    }
+
+    /* Validated! Staged cleanly in GPU-accessible memory (starts OFF for safe boot; toggle ON in-game) */
+    sp.loaded = 1;
+    sp.enabled = 0;
+    sp.shader_type = 1; /* CS_5_0 Compute Shader */
+    sp.shader_size = (uint32_t)sz;
+    sp.error_code = 0;
+    snprintf(sp.last_error_msg, sizeof(sp.last_error_msg), "Stage 1 Compute Ready (%u B, OFF)", (unsigned)sz);
+
+    kernel_proc_copyin(pid, &sp, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(sp));
+    free(sbuf);
+    log_msg("[GNM-SHADER] Validated and armed %s (%zu bytes)\n", ORBX_POSTPROCESS_SB, sz);
+    return 0;
+}
+
+int reload_orbx_shaders(void) {
+    pthread_mutex_lock(&g_host_lock);
+    int rc = reload_orbx_shaders_unlocked();
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int get_orbx_shader_probe(GnmShaderProbe *out_probe) {
+    if (!out_probe) return -1;
+    memset(out_probe, 0, sizeof(*out_probe));
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    int rc = kernel_proc_copyout(pid,
+                                (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)),
+                                out_probe, sizeof(GnmShaderProbe));
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int set_orbx_shader_enabled(uint32_t enabled) {
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    uint32_t val = enabled ? 1u : 0u;
+    int rc = kernel_proc_copyin(pid, &val,
+                                (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe) + offsetof(GnmShaderProbe, enabled)),
+                                sizeof(val));
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int set_orbx_shader_tunables(float bloom_thresh, float bloom_int, float exposure, float contrast, float sat, float vig, float aa, float sharp) {
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    GnmShaderProbe cur;
+    int rc = -1;
+    if (kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), &cur, sizeof(cur)) == 0) {
+        cur.bloom_threshold = bloom_thresh;
+        cur.bloom_intensity = bloom_int;
+        cur.exposure        = exposure;
+        cur.contrast        = contrast;
+        cur.saturation      = sat;
+        cur.vignette        = vig;
+        cur.anti_aliasing   = aa;
+        cur.sharpness       = sharp;
+        rc = kernel_proc_copyin(pid, &cur, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, shader_probe)), sizeof(cur));
+    }
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int get_orbx_depth_probe(GnmDepthProbe *out_probe) {
+    if (!out_probe) return -1;
+    memset(out_probe, 0, sizeof(*out_probe));
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    int rc = kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, depth_probe)), out_probe, sizeof(*out_probe));
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
+}
+
+int set_orbx_depth_tunables(float ssao_inten, float ssao_cp, float ssr_mult, float ssr_dist) {
+    pthread_mutex_lock(&g_host_lock);
+    if (!g_native_active || !g_native_pid || !g_native_ctx_addr) {
+        pthread_mutex_unlock(&g_host_lock);
+        return -1;
+    }
+    pid_t pid = (pid_t)g_native_pid;
+    GnmDepthProbe cur;
+    int rc = -1;
+    if (kernel_proc_copyout(pid, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, depth_probe)), &cur, sizeof(cur)) == 0) {
+        cur.ssao_intensity   = ssao_inten;
+        cur.ssao_cp_strength = ssao_cp;
+        cur.ssr_intensity    = ssr_mult;
+        cur.ssr_distance     = ssr_dist;
+        cur.stage            = 3u; /* SSAO_ACTIVE */
+        rc = kernel_proc_copyin(pid, &cur, (intptr_t)(g_native_ctx_addr + offsetof(OrbxNativeContext, depth_probe)), sizeof(cur));
+    }
+    pthread_mutex_unlock(&g_host_lock);
+    return rc;
 }

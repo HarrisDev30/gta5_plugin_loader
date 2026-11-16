@@ -136,46 +136,53 @@ static int copy_single_file(const char *src_path, const char *dst_path) {
 
 // Stage host directory into a specific sandbox subdirectory (e.g. "plugins" or "data/orbx")
 static int stage_into_sandbox(const char *real_src, const char *sandbox_dir,
-                              const char *sandbox_rel_dir, const char *probe_filename) {
+                              const char *sandbox_rel_dir, const char *probe_filename,
+                              int read_only) {
     char target_dir[512];
     const char *rel = (sandbox_rel_dir && sandbox_rel_dir[0] != '\0') ? sandbox_rel_dir : "plugins";
     while (*rel == '/') rel++;
     snprintf(target_dir, sizeof(target_dir), "%s/%s", sandbox_dir, rel);
     mkdir_recursive(target_dir);
 
-    // 1. Try FreeBSD nullfs loopback mount
+    // 1. Try FreeBSD nullfs loopback mount (6 iovecs, canonical fstype/from/fspath, MNT_RDONLY when requested)
     struct statfs fs;
     int mounted = 0;
     if (statfs(target_dir, &fs) == 0 && strcmp(fs.f_fstypename, "nullfs") == 0) {
-        log_msg("[NULLFS] Target '%s' is already mounted via nullfs\n", target_dir);
-        mounted = 1;
-    } else {
+        int stale_rw = (read_only && !(fs.f_flags & MNT_RDONLY));
+        int src_mismatch = (strcmp(fs.f_mntfromname, real_src) != 0);
+        if ((stale_rw || src_mismatch) && unmount(target_dir, 0) == 0) {
+            log_msg("[NULLFS] Refreshed stale nullfs mount at '%s'\n", target_dir);
+        } else {
+            log_msg("[NULLFS] Target '%s' is already mounted via nullfs (flags=0x%llx)\n",
+                    target_dir, (unsigned long long)fs.f_flags);
+            mounted = 1;
+        }
+    }
+
+    if (!mounted) {
         char fstype_key[] = "fstype";
         char nullfs_val[] = "nullfs";
-        char fspath_key[] = "fspath";
         char from_key[]   = "from";
-        char target_key[] = "target";
+        char fspath_key[] = "fspath";
 
-        struct iovec iov[8];
+        struct iovec iov[6];
         iov[0].iov_base = fstype_key;
         iov[0].iov_len  = sizeof(fstype_key);
         iov[1].iov_base = nullfs_val;
         iov[1].iov_len  = sizeof(nullfs_val);
-        iov[2].iov_base = fspath_key;
-        iov[2].iov_len  = sizeof(fspath_key);
-        iov[3].iov_base = (void *)target_dir;
-        iov[3].iov_len  = strlen(target_dir) + 1;
-        iov[4].iov_base = from_key;
-        iov[4].iov_len  = sizeof(from_key);
-        iov[5].iov_base = (void *)real_src;
-        iov[5].iov_len  = strlen(real_src) + 1;
-        iov[6].iov_base = target_key;
-        iov[6].iov_len  = sizeof(target_key);
-        iov[7].iov_base = (void *)real_src;
-        iov[7].iov_len  = strlen(real_src) + 1;
+        iov[2].iov_base = from_key;
+        iov[2].iov_len  = sizeof(from_key);
+        iov[3].iov_base = (void *)real_src;
+        iov[3].iov_len  = strlen(real_src) + 1;
+        iov[4].iov_base = fspath_key;
+        iov[4].iov_len  = sizeof(fspath_key);
+        iov[5].iov_base = (void *)target_dir;
+        iov[5].iov_len  = strlen(target_dir) + 1;
 
-        log_msg("[NULLFS] Attempting nmount: '%s' -> '%s'...\n", real_src, target_dir);
-        int res = nmount(iov, 8, 0);
+        int mnt_flags = read_only ? MNT_RDONLY : 0;
+        log_msg("[NULLFS] Attempting nmount (%s): '%s' -> '%s'...\n",
+                read_only ? "ro" : "rw", real_src, target_dir);
+        int res = nmount(iov, 6, mnt_flags);
         if (res == 0) {
             log_msg("[NULLFS] nmount syscall succeeded!\n");
             mounted = 1;
@@ -222,7 +229,7 @@ static int stage_into_sandbox(const char *real_src, const char *sandbox_dir,
 
 int mount_sandbox_subpath(const char *title_id, const char *host_source_dir,
                           const char *sandbox_rel_dir, const char *probe_filename,
-                          char *out_sandbox_path, size_t max_len) {
+                          int read_only, char *out_sandbox_path, size_t max_len) {
     if (!host_source_dir) return -1;
 
     const char *rel = (sandbox_rel_dir && sandbox_rel_dir[0] != '\0') ? sandbox_rel_dir : "plugins";
@@ -234,33 +241,13 @@ int mount_sandbox_subpath(const char *title_id, const char *host_source_dir,
         snprintf(real_src, sizeof(real_src), "%s", host_source_dir);
     }
 
-    // 2. Resolve primary active sandbox root for this game
+    // 2. Resolve primary active sandbox root for this game (never spray inactive sibling sandboxes)
     char sandbox_root[256];
     find_sandbox_directory(title_id, sandbox_root, sizeof(sandbox_root));
     log_msg("[SANDBOX] Selected primary sandbox: %s (target: /%s)\n", sandbox_root, rel);
 
-    // 3. Stage into primary sandbox
-    int res = stage_into_sandbox(real_src, sandbox_root, rel, probe_filename);
-
-    // 4. Mirror/stage into any other matching sandboxes for this title_id
-    DIR *dir = opendir("/mnt/sandbox");
-    if (dir) {
-        char prefix[64];
-        snprintf(prefix, sizeof(prefix), "%s", title_id ? title_id : "CUSA00419");
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            if (entry->d_name[0] == '.') continue;
-            if (strcmp(entry->d_name, "pfsmnt") == 0) continue;
-            if (strncasecmp(entry->d_name, prefix, strlen(prefix)) == 0) {
-                char candidate[512];
-                snprintf(candidate, sizeof(candidate), "/mnt/sandbox/%s", entry->d_name);
-                if (strcmp(candidate, sandbox_root) != 0) {
-                    stage_into_sandbox(real_src, candidate, rel, probe_filename);
-                }
-            }
-        }
-        closedir(dir);
-    }
+    // 3. Stage strictly into primary active sandbox
+    int res = stage_into_sandbox(real_src, sandbox_root, rel, probe_filename, read_only);
 
     if (out_sandbox_path) {
         snprintf(out_sandbox_path, max_len, "/%s", rel);
@@ -271,26 +258,60 @@ int mount_sandbox_subpath(const char *title_id, const char *host_source_dir,
 }
 
 int mount_sandbox_nullfs(const char *title_id, const char *host_source_dir, char *out_sandbox_path, size_t max_len) {
-    return mount_sandbox_subpath(title_id, host_source_dir, "plugins", NULL, out_sandbox_path, max_len);
+    return mount_sandbox_subpath(title_id, host_source_dir, "plugins", NULL, 1, out_sandbox_path, max_len);
 }
 
 int unmount_sandbox_nullfs(const char *title_id) {
     (void)title_id;
+    int any_failed = 0;
     for (size_t i = g_mountpoint_count; i > 0; i--) {
-        const char *mp = g_mountpoints[i - 1];
-        if (mp[0] != '\0') {
-            struct statfs fs;
-            // Only unmount if it is actually still mounted as nullfs
-            if (statfs(mp, &fs) == 0 && strcmp(fs.f_fstypename, "nullfs") == 0) {
-                // Try clean unmount without MNT_FORCE first to prevent kernel vnode deadlocks
-                if (unmount(mp, 0) != 0) {
-                    usleep(30000); // 30ms brief backoff
-                    unmount(mp, MNT_FORCE);
+        char *mp = g_mountpoints[i - 1];
+        if (mp[0] == '\0') continue;
+
+        struct statfs fs;
+        int still_nullfs = (statfs(mp, &fs) == 0 && strcmp(fs.f_fstypename, "nullfs") == 0);
+        if (still_nullfs) {
+            int unmounted = 0;
+            int last_err = 0;
+            // Bounded clean unmount retries without MNT_FORCE to avoid SceShellCore kernel vnode deadlocks
+            for (int attempt = 0; attempt < 6; attempt++) {
+                if (unmount(mp, 0) == 0) {
+                    unmounted = 1;
+                    break;
                 }
+                last_err = errno;
+                if (statfs(mp, &fs) != 0 || strcmp(fs.f_fstypename, "nullfs") != 0) {
+                    unmounted = 1;
+                    break;
+                }
+                if (last_err != EBUSY && last_err != EAGAIN) {
+                    break;
+                }
+                usleep(100000);
             }
-            g_mountpoints[i - 1][0] = '\0';
+            if (unmounted) {
+                log_msg("[NULLFS] Cleanly unmounted '%s'\n", mp);
+                mp[0] = '\0';
+            } else {
+                log_msg("[NULLFS] Warning: clean unmount of '%s' failed errno=%d (%s); skipping MNT_FORCE\n",
+                        mp, last_err, strerror(last_err));
+                any_failed = 1;
+            }
+        } else {
+            mp[0] = '\0';
         }
     }
-    g_mountpoint_count = 0;
-    return 0;
+
+    size_t remaining = 0;
+    for (size_t i = 0; i < g_mountpoint_count; i++) {
+        if (g_mountpoints[i][0] != '\0') {
+            if (remaining != i) {
+                snprintf(g_mountpoints[remaining], sizeof(g_mountpoints[remaining]), "%s", g_mountpoints[i]);
+                g_mountpoints[i][0] = '\0';
+            }
+            remaining++;
+        }
+    }
+    g_mountpoint_count = remaining;
+    return any_failed ? -1 : 0;
 }

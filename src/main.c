@@ -112,7 +112,7 @@ static void elevate_proc_full(pid_t pid) {
     kernel_set_ucred_svuid(pid, 0);
     kernel_set_ucred_rgid(pid, 0);
     kernel_set_ucred_svgid(pid, 0);
-    kernel_set_ucred_authid(pid, 0x4800000000010003ULL);
+    kernel_set_ucred_authid(pid, 0x4801000000000013ULL);
 
     uint8_t caps[16];
     memset(caps, 0xff, sizeof(caps));
@@ -120,7 +120,10 @@ static void elevate_proc_full(pid_t pid) {
 
     uint8_t attrs[32];
     memset(attrs, 0, sizeof(attrs));
-    attrs[0] = 0x80;
+    if (kernel_get_ucred_attrs(pid, attrs) != 0) {
+        memset(attrs, 0, sizeof(attrs));
+    }
+    attrs[0] |= 0x80;
     kernel_set_ucred_attrs(pid, attrs);
 }
 
@@ -295,6 +298,21 @@ static int resolve_legacy_prx_name(const ModhenConfig *cfg, char *out_name, size
     return found;
 }
 
+static volatile sig_atomic_t g_keep_running = 1;
+
+static void handle_exit_signal(int sig) {
+    (void)sig;
+    g_keep_running = 0;
+}
+
+static void sleep_ms_interruptible(int total_ms) {
+    while (total_ms > 0 && g_keep_running) {
+        int chunk = (total_ms > 50) ? 50 : total_ms;
+        usleep((useconds_t)chunk * 1000u);
+        total_ms -= chunk;
+    }
+}
+
 // Handle GTA V lifecycle injection
 void handle_game_launch(pid_t pid, const char *title_id) {
     log_msg("====================================================\n");
@@ -312,27 +330,33 @@ void handle_game_launch(pid_t pid, const char *title_id) {
     log_msg("[modHEN] Active Config: native_orbx=%d, legacy_prx=%d, heap_probe=%d, heap_adjuster=%d, heap_size_mb=%d, legacy_prx_name='%s'\n",
             cfg.native_orbx, cfg.legacy_prx, cfg.heap_probe, cfg.heap_adjuster, cfg.heap_size_mb, cfg.legacy_prx_name);
 
-    // Poll every 150ms until eboot GOT / libkernel imports are ready so we hook BEFORE update.rpf loads
+    // Poll every 50ms until libkernel is mapped and eboot GOT imports are present so we hook BEFORE update.rpf loads
     log_msg("[modHEN] Waiting for eboot.bin dynamic linker...\n");
     uint32_t waited_ms = 0;
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 60 && g_keep_running; i++) {
         if (kill(pid, 0) != 0) {
             log_msg("[modHEN] Game exited during boot wait, aborting staging.\n");
             return;
         }
-        if (find_eboot_got_slot_by_nid(pid, "1G3lF1Gg1k8") != 0) {
+        uint32_t lk_h = 0;
+        int has_lk = ((kernel_dynlib_handle(pid, "libkernel.sprx", &lk_h) == 0 ||
+                       kernel_dynlib_handle(pid, "libkernel_sys.sprx", &lk_h) == 0) && lk_h != 0);
+        if (has_lk && find_eboot_got_slot_by_nid(pid, "1G3lF1Gg1k8") != 0) {
             break;
         }
-        usleep(150000);
-        waited_ms += 150;
+        sleep_ms_interruptible(50);
+        waited_ms += 50;
     }
-    if (kill(pid, 0) != 0) return;
+    if (!g_keep_running || kill(pid, 0) != 0) return;
     log_msg("[modHEN] Dynamic linker ready after %ums\n", waited_ms);
 
-    // 1. Mount /data/orbx and /data/modHEN/plugins into sandbox via nullfs
+    // 1. Mount /data/orbx (read-only in Native Orbx mode) and /plugins (only when Legacy PRX is active)
     char sandbox_orbx[128] = {0};
-    if (mount_sandbox_subpath(title_id, "/data/orbx", "data/orbx", NULL, sandbox_orbx, sizeof(sandbox_orbx)) == 0) {
-        log_msg("[modHEN] Sandbox mounted: %s -> /data/orbx\n", sandbox_orbx);
+    int orbx_read_only = (cfg.legacy_prx == 0) ? 1 : 0;
+    if (mount_sandbox_subpath(title_id, "/data/orbx", "data/orbx", NULL,
+                              orbx_read_only, sandbox_orbx, sizeof(sandbox_orbx)) == 0) {
+        log_msg("[modHEN] Sandbox mounted: %s -> /data/orbx (%s)\n",
+                sandbox_orbx, orbx_read_only ? "ro" : "rw");
     } else {
         log_msg("[modHEN] Warning: /data/orbx nullfs mount returned non-zero!\n");
     }
@@ -341,11 +365,13 @@ void handle_game_launch(pid_t pid, const char *title_id) {
     int have_legacy_name = (cfg.legacy_prx && resolve_legacy_prx_name(&cfg, legacy_name, sizeof(legacy_name)) == 0);
 
     char sandbox_plugins[128] = {0};
-    int mres = mount_sandbox_subpath(title_id, PRIMARY_PLUGINS_DIR, "plugins",
-                                     have_legacy_name ? legacy_name : NULL,
-                                     sandbox_plugins, sizeof(sandbox_plugins));
-    if (mres == 0) {
-        log_msg("[modHEN] Sandbox mounted: %s\n", sandbox_plugins);
+    if (cfg.legacy_prx) {
+        int mres = mount_sandbox_subpath(title_id, PRIMARY_PLUGINS_DIR, "plugins",
+                                         have_legacy_name ? legacy_name : NULL,
+                                         1, sandbox_plugins, sizeof(sandbox_plugins));
+        if (mres == 0) {
+            log_msg("[modHEN] Sandbox mounted: %s (ro)\n", sandbox_plugins);
+        }
     }
 
     // 2. Keep GTA V inside its jail root so /app0 and /savedata0 remain intact while nullfs exposes /data/orbx
@@ -384,7 +410,8 @@ void handle_game_launch(pid_t pid, const char *title_id) {
                          sandbox_plugins[0] ? sandbox_plugins : "/plugins", legacy_name);
             }
             log_msg("[modHEN] Legacy PRX Slot armed for: %s (waiting 3s for libScePad...)\n", target_plugin);
-            sleep(3);
+            sleep_ms_interruptible(3000);
+            if (!g_keep_running || kill(pid, 0) != 0) return;
 
             uint32_t handle = 0;
             int hres = install_pad_hook(pid, target_plugin, &handle);
@@ -399,13 +426,6 @@ void handle_game_launch(pid_t pid, const char *title_id) {
             }
         }
     }
-}
-
-static volatile sig_atomic_t g_keep_running = 1;
-
-static void handle_exit_signal(int sig) {
-    (void)sig;
-    g_keep_running = 0;
 }
 
 static void kill_previous_loader_instances(void) {
@@ -444,8 +464,8 @@ static void kill_previous_loader_instances(void) {
         kill(victims[i], SIGTERM);
     }
 
-    // Wait up to 800ms for old process to exit cleanly
-    for (int step = 0; step < 8; step++) {
+    // Wait up to 2500ms for old process to finish any ptrace/unmount/socket cleanup cleanly
+    for (int step = 0; step < 25; step++) {
         int any_alive = 0;
         for (size_t i = 0; i < victim_count; i++) {
             if (kill(victims[i], 0) == 0) {
@@ -472,12 +492,14 @@ static void kill_previous_loader_instances(void) {
 int main(void) {
     sceKernelSetProcessName("modHEN_loader");
     elevate_self();
-    kill_previous_loader_instances();
 
     signal(SIGTERM, handle_exit_signal);
     signal(SIGINT,  handle_exit_signal);
     signal(SIGHUP,  handle_exit_signal);
     signal(SIGQUIT, handle_exit_signal);
+    signal(SIGPIPE, SIG_IGN);
+
+    kill_previous_loader_instances();
 
     unlink(LOG_PATH);
     log_msg("====================================================\n");
@@ -500,28 +522,32 @@ int main(void) {
     notify("modHEN PS5 Loader Active! (Port 8050) Launch GTA V now.");
 
     pid_t last_pid = 0;
+    char  last_title_id[16] = {0};
 
     while (g_keep_running) {
         if (last_pid > 0) {
             // Check if game process is still alive FIRST!
             if (kill(last_pid, 0) != 0) {
                 log_msg("[modHEN] Game session ended (PID %d)\n", last_pid);
+                poll_orbx_native_telemetry(last_pid);
                 reset_orbx_native_state();
                 set_web_server_game_status(0, 0, NULL);
 
-                // Give SceShellCore 300ms to begin its own app teardown without VFS lock contention
-                usleep(300000);
-                unmount_sandbox_nullfs("CUSA00419");
+                // Give SceShellCore & kernel reaper time to release open vnodes before clean nullfs unmount
+                sleep_ms_interruptible(800);
+                unmount_sandbox_nullfs(last_title_id[0] ? last_title_id : "CUSA00419");
                 last_pid = 0;
+                last_title_id[0] = '\0';
+                if (!g_keep_running) break;
 
                 // 1.0s cooldown to allow SceShellCore to restore full foreground focus and event handling
-                usleep(1000000);
+                sleep_ms_interruptible(1000);
                 continue;
             }
 
-            // Only poll telemetry while process is verified alive!
+            // Poll telemetry at a gentle 4 Hz (250ms) so kernel DMAP / OS focus handling stays responsive
             poll_orbx_native_telemetry(last_pid);
-            usleep(50000);
+            sleep_ms_interruptible(250);
             continue;
         }
 
@@ -529,16 +555,24 @@ int main(void) {
         pid_t gta_pid = find_gta_process(title_id);
         if (gta_pid > 0) {
             last_pid = gta_pid;
+            snprintf(last_title_id, sizeof(last_title_id), "%s", title_id);
             handle_game_launch(gta_pid, title_id);
         }
 
-        usleep(500000); // 500ms launch detection polling (gentle on OS IPC)
+        sleep_ms_interruptible(500); // 500ms launch detection polling (gentle on OS IPC)
     }
 
     log_msg("[modHEN] Daemon shutting down gracefully...\n");
     if (last_pid > 0) {
+        int game_exited = (kill(last_pid, 0) != 0);
+        if (game_exited) {
+            poll_orbx_native_telemetry(last_pid);
+        }
         reset_orbx_native_state();
-        unmount_sandbox_nullfs("CUSA00419");
+        /* Only unmount nullfs after the game has exited so daemon self-replace preserves live mounts. */
+        if (game_exited) {
+            unmount_sandbox_nullfs(last_title_id[0] ? last_title_id : "CUSA00419");
+        }
     }
     stop_web_server();
     log_msg("[modHEN] Shutdown complete.\n");

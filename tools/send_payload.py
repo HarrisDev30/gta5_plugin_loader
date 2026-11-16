@@ -2,7 +2,7 @@ import socket
 import sys
 import os
 
-PS5_IP = "10.138.159.177"
+PS5_IP = "10.255.54.177"
 ELF_PATH = "D:/ps5payload/gta5_plugin_loader/gta5_plugin_loader.elf"
 
 def send_payload(ip=PS5_IP, elf_path=ELF_PATH):

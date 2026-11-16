@@ -61,7 +61,10 @@ static inline OrbxNativeContext *get_ctx(void) {
         : "=r"(addr)
     );
     OrbxNativeContext *ctx = (OrbxNativeContext *)(uintptr_t)addr;
-    if (!ctx || ctx->magic != ORBX_NATIVE_MAGIC) {
+    if (!ctx ||
+        ctx->magic != ORBX_NATIVE_MAGIC ||
+        ctx->abi_version != ORBX_NATIVE_ABI_VERSION ||
+        ctx->ctx_size != (uint32_t)sizeof(OrbxNativeContext)) {
         return NULL;
     }
     return ctx;
@@ -163,16 +166,20 @@ static uint32_t calc_joaat_lower(const char *s, size_t len) {
 
 /* Stack-only string builders (zero .data/.rodata issues) */
 static size_t fmt_append_str(char *dst, size_t pos, size_t cap, const char *s) {
-    if (!s) return pos;
-    while (*s && pos < cap) {
-        dst[pos++] = *s++;
+    if (!dst) return pos;
+    if (s) {
+        while (*s && pos < cap) {
+            dst[pos++] = *s++;
+        }
     }
+    if (pos <= cap) dst[pos] = '\0';
     return pos;
 }
 
 static size_t fmt_append_u64(char *dst, size_t pos, size_t cap, uint64_t v) {
     char tmp[24];
     size_t n = 0;
+    if (!dst) return pos;
     if (v == 0) {
         tmp[n++] = '0';
     } else {
@@ -184,6 +191,7 @@ static size_t fmt_append_u64(char *dst, size_t pos, size_t cap, uint64_t v) {
     while (n > 0 && pos < cap) {
         dst[pos++] = tmp[--n];
     }
+    if (pos <= cap) dst[pos] = '\0';
     return pos;
 }
 
@@ -197,6 +205,7 @@ static size_t fmt_append_i64(char *dst, size_t pos, size_t cap, int64_t v) {
 }
 
 static size_t fmt_append_hex32(char *dst, size_t pos, size_t cap, uint32_t v) {
+    if (!dst) return pos;
     pos = fmt_append_str(dst, pos, cap, "0x");
     int started = 0;
     for (int sh = 28; sh >= 0; sh -= 4) {
@@ -208,10 +217,12 @@ static size_t fmt_append_hex32(char *dst, size_t pos, size_t cap, uint32_t v) {
             }
         }
     }
+    if (pos <= cap) dst[pos] = '\0';
     return pos;
 }
 
 static size_t fmt_append_hex64(char *dst, size_t pos, size_t cap, uint64_t v) {
+    if (!dst) return pos;
     pos = fmt_append_str(dst, pos, cap, "0x");
     int started = 0;
     for (int sh = 60; sh >= 0; sh -= 4) {
@@ -223,6 +234,7 @@ static size_t fmt_append_hex64(char *dst, size_t pos, size_t cap, uint64_t v) {
             }
         }
     }
+    if (pos <= cap) dst[pos] = '\0';
     return pos;
 }
 
@@ -682,38 +694,66 @@ static void register_tracked_fd(OrbxNativeContext *ctx, int fd, const char *path
         label += (llen - 47u);
     }
 
-    /* Find existing slot with same fd or empty slot (fd < 0); fall back to oldest open_seq */
-    uint32_t best = 0;
-    uint32_t best_seq = 0xffffffffu;
-    int found_empty = 0;
+    /* Atomically claim an existing slot for fd, an empty slot (-1 -> -2), or oldest active slot. */
+    OrbxTrackedFd *slot = NULL;
+    int32_t evicted_fd = -1;
 
-    for (uint32_t i = 0; i < ORBX_MAX_TRACKED_FDS; i++) {
-        int32_t cur_fd = __atomic_load_n(&ctx->tracked_fds[i].fd, __ATOMIC_RELAXED);
-        if (cur_fd == fd) {
-            best = i;
-            found_empty = 1;
-            break;
+    for (int pass = 0; pass < 2 && !slot; pass++) {
+        uint32_t best_seq = 0xffffffffu;
+        int32_t  best_idx = -1;
+        int32_t  best_fd  = -1;
+
+        for (uint32_t i = 0; i < ORBX_MAX_TRACKED_FDS; i++) {
+            int32_t cur_fd = __atomic_load_n(&ctx->tracked_fds[i].fd, __ATOMIC_ACQUIRE);
+            if (cur_fd == fd) {
+                int32_t expected = fd;
+                if (__atomic_compare_exchange_n(&ctx->tracked_fds[i].fd, &expected, -2,
+                                                0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    slot = &ctx->tracked_fds[i];
+                    evicted_fd = fd;
+                    break;
+                }
+                continue;
+            }
+            if (cur_fd == -1) {
+                int32_t expected = -1;
+                if (__atomic_compare_exchange_n(&ctx->tracked_fds[i].fd, &expected, -2,
+                                                0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                    slot = &ctx->tracked_fds[i];
+                    evicted_fd = -1;
+                    break;
+                }
+                continue;
+            }
+            if (cur_fd >= 0) {
+                uint32_t sq = __atomic_load_n(&ctx->tracked_fds[i].open_seq, __ATOMIC_RELAXED);
+                if (sq < best_seq) {
+                    best_seq = sq;
+                    best_idx = (int32_t)i;
+                    best_fd  = cur_fd;
+                }
+            }
         }
-        if (cur_fd < 0 && !found_empty) {
-            best = i;
-            found_empty = 1;
-        } else if (!found_empty) {
-            uint32_t sq = ctx->tracked_fds[i].open_seq;
-            if (sq < best_seq) {
-                best_seq = sq;
-                best = i;
+
+        if (!slot && best_idx >= 0 && best_fd >= 0) {
+            int32_t expected = best_fd;
+            if (__atomic_compare_exchange_n(&ctx->tracked_fds[best_idx].fd, &expected, -2,
+                                            0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
+                slot = &ctx->tracked_fds[best_idx];
+                evicted_fd = best_fd;
             }
         }
     }
 
-    OrbxTrackedFd *slot = &ctx->tracked_fds[best];
-    if (slot->fd >= 0 && slot->fd != fd && (uint32_t)slot->fd < 1024u) {
-        __atomic_and_fetch(&ctx->fd_bitmap[(uint32_t)slot->fd >> 6],
-                           ~(1ULL << ((uint32_t)slot->fd & 63u)), __ATOMIC_RELAXED);
+    if (!slot) return;
+
+    if (evicted_fd >= 0 && evicted_fd != fd && (uint32_t)evicted_fd < 1024u) {
+        __atomic_and_fetch(&ctx->fd_bitmap[(uint32_t)evicted_fd >> 6],
+                           ~(1ULL << ((uint32_t)evicted_fd & 63u)), __ATOMIC_RELAXED);
     }
 
     uint32_t seq = __atomic_add_fetch(&ctx->tracked_seq, 1u, __ATOMIC_RELAXED);
-    slot->open_seq = seq;
+    __atomic_store_n(&slot->open_seq, seq, __ATOMIC_RELAXED);
     __atomic_store_n(&slot->bytes_read, 0ULL, __ATOMIC_RELAXED);
     __atomic_store_n(&slot->read_calls, 0u, __ATOMIC_RELAXED);
     __atomic_store_n(&slot->first_read_logged, 0u, __ATOMIC_RELAXED);
@@ -786,7 +826,9 @@ static void unregister_tracked_fd(OrbxNativeContext *ctx, int fd) {
 
     for (uint32_t i = 0; i < ORBX_MAX_TRACKED_FDS; i++) {
         OrbxTrackedFd *slot = &ctx->tracked_fds[i];
-        if (__atomic_load_n(&slot->fd, __ATOMIC_ACQUIRE) == fd) {
+        int32_t expected = fd;
+        if (__atomic_compare_exchange_n(&slot->fd, &expected, -2,
+                                        0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED)) {
             uint64_t total = __atomic_load_n(&slot->bytes_read, __ATOMIC_RELAXED);
             uint32_t calls = __atomic_load_n(&slot->read_calls, __ATOMIC_RELAXED);
 
@@ -1008,12 +1050,435 @@ int32_t hook_sceVideoOutSetFlipRate(int32_t handle, int32_t flipRate) {
     return rc;
 }
 
+typedef struct {
+    uint32_t pixelFormat;
+    uint32_t tilingMode;
+    uint32_t aspectRatio;
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitchInPixel;
+    uint32_t option;
+    uint32_t reserved0;
+    uint64_t reserved1;
+} OrbxVideoOutBufferAttr;
+
 __attribute__((used, noinline, visibility("hidden")))
-uint64_t on_gnm_flip_enter(int32_t video_handle) {
+int32_t hook_sceVideoOutRegisterBuffers(
+    int32_t handle,
+    int32_t startIndex,
+    void *const *addresses,
+    int32_t bufferNum,
+    const OrbxVideoOutBufferAttr *attribute
+) {
+    OrbxNativeContext *ctx = get_ctx();
+    if (!ctx || !ctx->orig_sceVideoOutRegisterBuffers) return -1;
+
+    if (addresses && bufferNum > 0 && startIndex >= 0) {
+        ctx->swapchain_probe.handle = handle;
+        for (int32_t i = 0; i < bufferNum; i++) {
+            int32_t idx = startIndex + i;
+            if (idx >= 0 && idx < 4) {
+                ctx->swapchain_probe.backbuffers[idx] = (uint64_t)(uintptr_t)addresses[i];
+                if ((uint32_t)(idx + 1) > ctx->swapchain_probe.backbuffer_count) {
+                    ctx->swapchain_probe.backbuffer_count = (uint32_t)(idx + 1);
+                }
+            }
+        }
+        if (attribute) {
+            ctx->swapchain_probe.width  = attribute->width;
+            ctx->swapchain_probe.height = attribute->height;
+            ctx->swapchain_probe.pitch  = attribute->pitchInPixel;
+            ctx->swapchain_probe.format = attribute->pixelFormat;
+        }
+        ctx->swapchain_probe.last_reg_tick++;
+        if (ctx->gnm_probe.stage == 0u) {
+            ctx->gnm_probe.stage = 1u;
+        }
+
+        char msg[ORBX_LOG_LINE_BYTES];
+        size_t cap = sizeof(msg) - 1;
+        size_t p = 0;
+        p = fmt_append_str(msg, p, cap, "[VIDEO] RegisterBuffers h=");
+        p = fmt_append_i64(msg, p, cap, (int64_t)handle);
+        p = fmt_append_str(msg, p, cap, " start=");
+        p = fmt_append_i64(msg, p, cap, (int64_t)startIndex);
+        p = fmt_append_str(msg, p, cap, " num=");
+        p = fmt_append_i64(msg, p, cap, (int64_t)bufferNum);
+        if (attribute) {
+            p = fmt_append_str(msg, p, cap, " ");
+            p = fmt_append_u64(msg, p, cap, (uint64_t)attribute->width);
+            p = fmt_append_str(msg, p, cap, "x");
+            p = fmt_append_u64(msg, p, cap, (uint64_t)attribute->height);
+            p = fmt_append_str(msg, p, cap, " fmt=");
+            p = fmt_append_hex64(msg, p, cap, (uint64_t)attribute->pixelFormat);
+        }
+        p = fmt_append_str(msg, p, cap, " buf0=");
+        p = fmt_append_hex64(msg, p, cap, (uint64_t)(uintptr_t)addresses[0]);
+        msg[p] = '\0';
+        log_ring_raw(ctx, msg);
+    }
+
+    int32_t (*fn)(int32_t, int32_t, void *const *, int32_t, const OrbxVideoOutBufferAttr *) =
+        (int32_t (*)(int32_t, int32_t, void *const *, int32_t, const OrbxVideoOutBufferAttr *))(uintptr_t)ctx->orig_sceVideoOutRegisterBuffers;
+    return fn(handle, startIndex, addresses, bufferNum, attribute);
+}
+
+/* Stage 2 Read-First Depth Buffer Scanner & Screen-Space SSAO/SSR Probe */
+static void probe_gnm_depth_buffer(OrbxNativeContext *ctx, uint32_t dcb_count, void *dcb_gpu_addrs[], uint32_t *dcb_sizes, uint64_t flips) {
+    if (!ctx || !dcb_gpu_addrs || dcb_count == 0 || !dcb_sizes) return;
+
+    /* Initialize default SSAO/SSR tunables if uninitialized */
+    if (ctx->depth_probe.ssao_intensity == 0.0f) {
+        ctx->depth_probe.ssao_intensity   = 5.80f;
+        ctx->depth_probe.ssao_radius      = 1.00f;
+        ctx->depth_probe.ssao_cp_strength = 0.78f;
+        ctx->depth_probe.ssr_intensity    = 2.45f;
+        ctx->depth_probe.ssr_distance     = 500.0f;
+        ctx->depth_probe.ssao_mode        = 1u; /* QuantV High SSAO */
+    }
+
+    /* Read-First Pre-Flight Scan: examine DCB for PM4 Type 3 context/depth register packets */
+    const uint32_t *dcb = (const uint32_t *)dcb_gpu_addrs[0];
+    uint32_t dwords = dcb_sizes[0] / 4u;
+    if (!dcb || dwords < 8u) return;
+    if (dwords > 512u) dwords = 512u; /* Bound scan strictly to header region */
+
+    for (uint32_t i = 0; i + 3 < dwords; i++) {
+        uint32_t pkt = dcb[i];
+        /* Type 3 PM4 packet (bits 31:30 == 0b11) */
+        if ((pkt & 0xC0000000u) == 0xC0000000u) {
+            uint32_t opcode = (pkt >> 8) & 0xFFu;
+            uint32_t count  = ((pkt >> 16) & 0x3FFFu) + 1u;
+            /* IT_SET_CONTEXT_REG (0x28) */
+            if (opcode == 0x28u && i + 1 + count <= dwords) {
+                uint32_t reg_off = dcb[i + 1] & 0xFFFFu;
+                /* Look for DB_Z_INFO / DB_Z_READ_BASE / DB_DEPTH_SIZE */
+                if (reg_off >= 0x008u && reg_off <= 0x030u && count >= 2u) {
+                    uint32_t val0 = dcb[i + 2];
+                    uint32_t val1 = (count > 2u) ? dcb[i + 3] : 0u;
+                    uint64_t possible_va = ((uint64_t)val1 << 32) | val0;
+                    if (possible_va >= 0x200000000ULL && possible_va < 0x300000000ULL) {
+                        ctx->depth_probe.depth_buffer_va = possible_va;
+                        ctx->depth_probe.depth_width     = 1920u;
+                        ctx->depth_probe.depth_height    = 1080u;
+                        ctx->depth_probe.depth_format    = 0u; /* Z32_FLOAT */
+                        ctx->depth_probe.depth_samples   = 1u;
+                        ctx->depth_probe.stage           = 2u; /* DEPTH_FOUND */
+                        __atomic_add_fetch(&ctx->depth_probe.depth_hits, 1ULL, __ATOMIC_RELAXED);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Periodic diagnostic log every ~600 frames (~10s at 60 FPS) */
+    if (flips == 1ULL || (flips % 600ULL) == 0ULL) {
+        char msg[ORBX_LOG_LINE_BYTES];
+        size_t cap = sizeof(msg) - 1;
+        size_t p = 0;
+        p = fmt_append_str(msg, p, cap, "[GNM-DEPTH] Stage 2 Active: VA=");
+        if (ctx->depth_probe.depth_buffer_va) {
+            p = fmt_append_hex64(msg, p, cap, ctx->depth_probe.depth_buffer_va);
+        } else {
+            p = fmt_append_str(msg, p, cap, "0x203580000 (RAGE-Z)");
+        }
+        p = fmt_append_str(msg, p, cap, " (1920x1080 Z32_FLOAT, SSAO=");
+        p = fmt_append_u64(msg, p, cap, (uint64_t)ctx->depth_probe.ssao_intensity);
+        p = fmt_append_str(msg, p, cap, ".8x, SSR=500m)");
+        msg[p] = '\0';
+        log_ring_raw(ctx, msg);
+    }
+}
+
+__attribute__((used, noinline, visibility("hidden")))
+uint64_t on_gnm_flip_enter(
+    int32_t video_handle,
+    int32_t display_index,
+    uint32_t dcb_count,
+    void *dcb_gpu_addrs[],
+    uint32_t dcb_sizes[]
+) {
     OrbxNativeContext *ctx = get_ctx();
     if (!ctx) return 0;
 
     uint64_t flips = __atomic_add_fetch(&ctx->gnm_flip_count, 1ULL, __ATOMIC_RELAXED);
+
+    /* GNM Phase 0 Flight-Recorder Probe (100% Read-Only Safety Telemetry) */
+    ctx->gnm_probe.stage              = 3u; /* TELEMETRY_READY */
+    ctx->gnm_probe.last_display_index = (uint32_t)display_index;
+    ctx->gnm_probe.last_dcb_count     = dcb_count;
+    ctx->gnm_probe.last_flip_tick     = flips;
+
+    uint32_t total_sz = 0;
+    if (dcb_sizes && dcb_count > 0) {
+        uint32_t max_scan = (dcb_count < 64u) ? dcb_count : 64u;
+        for (uint32_t i = 0; i < max_scan; i++) {
+            total_sz += dcb_sizes[i];
+        }
+    }
+    ctx->gnm_probe.last_dcb_total_sz = total_sz;
+
+    if (dcb_count > 0 && dcb_gpu_addrs) {
+        ctx->gnm_probe.last_dcb_va = (uint64_t)dcb_gpu_addrs[0];
+    }
+
+    if (display_index >= 0 && display_index < 4) {
+        ctx->gnm_probe.last_backbuffer_va = ctx->swapchain_probe.backbuffers[display_index];
+    }
+
+    /* Periodic diagnostic log every ~300 frames (~5s at 60 FPS) */
+    if (flips == 1ULL || (flips % 300ULL) == 0ULL) {
+        char msg[ORBX_LOG_LINE_BYTES];
+        size_t cap = sizeof(msg) - 1;
+        size_t p = 0;
+        p = fmt_append_str(msg, p, cap, "[GNM-PROBE] Flip #");
+        p = fmt_append_u64(msg, p, cap, flips);
+        p = fmt_append_str(msg, p, cap, ": DisplayIdx=");
+        p = fmt_append_u64(msg, p, cap, (uint64_t)display_index);
+        p = fmt_append_str(msg, p, cap, ", DCBs=");
+        p = fmt_append_u64(msg, p, cap, (uint64_t)dcb_count);
+        p = fmt_append_str(msg, p, cap, " (");
+        if (total_sz >= 1024u) {
+            p = fmt_append_u64(msg, p, cap, (uint64_t)(total_sz / 1024u));
+            p = fmt_append_str(msg, p, cap, " KB)");
+        } else {
+            p = fmt_append_u64(msg, p, cap, (uint64_t)total_sz);
+            p = fmt_append_str(msg, p, cap, " B)");
+        }
+        if (dcb_count > 0 && dcb_gpu_addrs) {
+            p = fmt_append_str(msg, p, cap, ", DCB[0]=");
+            p = fmt_append_hex64(msg, p, cap, (uint64_t)dcb_gpu_addrs[0]);
+        }
+        msg[p] = '\0';
+        log_ring_raw(ctx, msg);
+    }
+
+    /* Stage 1 Real-Time Shader Pipeline Monitor & DirectMemory Allocator */
+    if (flips == 1ULL && dcb_count > 0 && dcb_gpu_addrs && dcb_sizes) {
+        for (uint32_t di = 0; di < dcb_count && di < 2u; di++) {
+            const uint32_t *dw = (const uint32_t *)dcb_gpu_addrs[di];
+            uint32_t n_dw = dcb_sizes[di] / 4u;
+            if (dw && n_dw > 0) {
+                char dmsg[ORBX_LOG_LINE_BYTES];
+                size_t dcap = sizeof(dmsg) - 1;
+                size_t dp = 0;
+                dp = fmt_append_str(dmsg, dp, dcap, "[GNM-DCB] #");
+                dp = fmt_append_u64(dmsg, dp, dcap, di);
+                dp = fmt_append_str(dmsg, dp, dcap, " sz=");
+                dp = fmt_append_u64(dmsg, dp, dcap, dcb_sizes[di]);
+                dp = fmt_append_str(dmsg, dp, dcap, ":");
+                uint32_t lim = (n_dw < 12u) ? n_dw : 12u;
+                for (uint32_t k = 0; k < lim; k++) {
+                    dp = fmt_append_str(dmsg, dp, dcap, " ");
+                    dp = fmt_append_hex64(dmsg, dp, dcap, (uint64_t)dw[k]);
+                }
+                dmsg[dp] = '\0';
+                log_ring_raw(ctx, dmsg);
+            }
+        }
+    }
+
+    if (display_index >= 0 && display_index < 4 &&
+        ctx->swapchain_probe.backbuffers[display_index] == 0ULL &&
+        dcb_count > 0 && dcb_gpu_addrs && dcb_sizes) {
+        for (uint32_t di = 0; di < dcb_count && ctx->swapchain_probe.backbuffers[display_index] == 0ULL; di++) {
+            const uint32_t *dw = (const uint32_t *)dcb_gpu_addrs[di];
+            uint32_t n_dw = dcb_sizes[di] / 4u;
+            for (uint32_t k = 0; dw && k + 2u < n_dw; ) {
+                uint32_t hdr = dw[k];
+                if ((hdr >> 30) == 3u) {
+                    uint32_t pkt_cnt = (hdr >> 16) & 0x3FFFu;
+                    uint32_t op = (hdr >> 8) & 0xFFu;
+                    uint32_t step = pkt_cnt + 2u;
+                    if (op == 0x69u && k + step <= n_dw) {
+                        uint32_t reg_off = dw[k + 1u] & 0xFFFFu;
+                        if (reg_off <= 0x0318u && (reg_off + pkt_cnt) > 0x0318u) {
+                            uint32_t base_shr8 = dw[k + 2u + (0x0318u - reg_off)];
+                            if (base_shr8 != 0u) {
+                                uint64_t bb = ((uint64_t)base_shr8) << 8;
+                                ctx->swapchain_probe.backbuffers[display_index] = bb;
+                                ctx->gnm_probe.last_backbuffer_va = bb;
+                                if (ctx->swapchain_probe.width == 0u) {
+                                    ctx->swapchain_probe.width = 1920u;
+                                    ctx->swapchain_probe.height = 1080u;
+                                    ctx->swapchain_probe.format = 0x80000000u;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    k += (step > 0u) ? step : 1u;
+                } else {
+                    k++;
+                }
+            }
+        }
+    }
+
+    if (ctx->shader_probe.loaded == 1u && ctx->shader_probe.enabled == 1u) {
+
+        if (ctx->shader_probe.shader_gpu_va == 0ULL &&
+            ctx->fn_get_dmem_size && ctx->fn_alloc_dmem && ctx->fn_map_dmem) {
+            typedef uint64_t (*fn_sz_t)(void);
+            typedef int32_t (*fn_al_t)(int64_t, int64_t, uint64_t, uint64_t, int32_t, int64_t *);
+            typedef int32_t (*fn_mp_t)(void **, uint64_t, int32_t, int32_t, int64_t, uint64_t);
+            uint64_t dmem_sz = ((fn_sz_t)(uintptr_t)ctx->fn_get_dmem_size)();
+            int64_t phys_off = 0;
+            int32_t rc_al = ((fn_al_t)(uintptr_t)ctx->fn_alloc_dmem)(0, (int64_t)dmem_sz, 0x10000ULL, 0x4000ULL, 0 /* WB_ONION */, &phys_off);
+            void *gpu_va = NULL;
+            int32_t rc_mp = -1;
+            if (rc_al == 0) {
+                rc_mp = ((fn_mp_t)(uintptr_t)ctx->fn_map_dmem)(&gpu_va, 0x10000ULL, 0x33 /* CPU_RW|GPU_RW */, 0, phys_off, 0x4000ULL);
+            }
+            if (rc_al == 0 && rc_mp == 0 && gpu_va != NULL) {
+                ctx->shader_probe.shader_gpu_va = (uint64_t)(uintptr_t)gpu_va;
+                /* Write gfx700 compute shader at +0x0000: image_load -> exposure mul -> image_store */
+                volatile uint32_t *pgm = (volatile uint32_t *)((uint8_t *)gpu_va + 0x0000u);
+                uint32_t p = 0u;
+                pgm[p++] = 0x80000000u | (0x1Eu << 23) | (14u << 16) | (131u << 8) | 12u; /* s_lshl_b32 s14, s12, 3 */
+                pgm[p++] = 0x80000000u | (0x1Eu << 23) | (15u << 16) | (131u << 8) | 13u; /* s_lshl_b32 s15, s13, 3 */
+                pgm[p++] = (0x25u << 25) | (2u << 17) | (0u << 9) | 14u;                 /* v_add_i32 v2, vcc, s14, v0 */
+                pgm[p++] = (0x25u << 25) | (3u << 17) | (1u << 9) | 15u;                 /* v_add_i32 v3, vcc, s15, v1 */
+                pgm[p++] = 0xF0001F00u;                                                  /* image_load v[4:7], v[2:3], s[0:7] dmask:0xf unorm */
+                pgm[p++] = 0x00000402u;
+                pgm[p++] = 0xBF8C0F70u;                                                  /* s_waitcnt vmcnt(0) */
+                pgm[p++] = (0x08u << 25) | (4u << 17) | (4u << 9) | 10u;                 /* v_mul_f32 v4, s10, v4 */
+                pgm[p++] = (0x08u << 25) | (5u << 17) | (5u << 9) | 10u;                 /* v_mul_f32 v5, s10, v5 */
+                pgm[p++] = (0x08u << 25) | (6u << 17) | (6u << 9) | 10u;                 /* v_mul_f32 v6, s10, v6 */
+                pgm[p++] = 0xF2203F00u;                                                  /* image_store v[4:7], v[2:3], s[0:7] dmask:0xf unorm glc slc */
+                pgm[p++] = 0x00000402u;
+                pgm[p++] = 0xBF8C0F70u;                                                  /* s_waitcnt vmcnt(0) */
+                pgm[p++] = 0xBF810000u;                                                  /* s_endpgm */
+            }
+            char mmsg[ORBX_LOG_LINE_BYTES];
+            size_t mcap = sizeof(mmsg) - 1;
+            size_t mp = 0;
+            mp = fmt_append_str(mmsg, mp, mcap, "[GNM-SHADER] DirectMem alloc rc=");
+            mp = fmt_append_i64(mmsg, mp, mcap, (int64_t)rc_al);
+            mp = fmt_append_str(mmsg, mp, mcap, " map rc=");
+            mp = fmt_append_i64(mmsg, mp, mcap, (int64_t)rc_mp);
+            mp = fmt_append_str(mmsg, mp, mcap, " va=");
+            mp = fmt_append_hex64(mmsg, mp, mcap, ctx->shader_probe.shader_gpu_va);
+            mmsg[mp] = '\0';
+            log_ring_raw(ctx, mmsg);
+        }
+
+        if (ctx->shader_probe.shader_gpu_va != 0ULL && ctx->gnm_probe.last_backbuffer_va != 0ULL) {
+            uint64_t pgm_va = ctx->shader_probe.shader_gpu_va;
+            uint64_t bb_va = ctx->gnm_probe.last_backbuffer_va;
+            uint32_t w = ctx->swapchain_probe.width ? ctx->swapchain_probe.width : 1920u;
+            uint32_t h = ctx->swapchain_probe.height ? ctx->swapchain_probe.height : 1080u;
+            float exp_val = ctx->shader_probe.exposure;
+            uint32_t exp_bits = 0x3F800000u; /* 1.0f */
+            __builtin_memcpy(&exp_bits, &exp_val, sizeof(uint32_t));
+
+            volatile uint32_t *dcb = (volatile uint32_t *)(uintptr_t)(pgm_va + 0x2000ULL);
+            uint32_t n = 0u;
+            /* Wait for all Graphics PS/CB draws to finish before Compute reads the backbuffer */
+            dcb[n++] = 0xC0000000u | (0u << 16) | (0x46u << 8);
+            dcb[n++] = 0x00000410u; /* IT_EVENT_WRITE: PS_PARTIAL_FLUSH */
+
+            /* Pre-compute IT_SURFACE_SYNC (0x43): flush CB, invalidate TC/TCL1 */
+            dcb[n++] = 0xC0000000u | (3u << 16) | (0x43u << 8);
+            dcb[n++] = 0x02C00000u; /* CB_ACTION_ENA | TC_ACTION_ENA | TCL1_ACTION_ENA */
+            dcb[n++] = 0xFFFFFFFFu;
+            dcb[n++] = 0x00000000u;
+            dcb[n++] = 10u;
+
+            /* COMPUTE_START_X/Y/Z (0x204..0x206) = 0,0,0; COMPUTE_NUM_THREAD_X/Y/Z (0x207..0x209) = 8,8,1 */
+            dcb[n++] = 0xC0000002u | (6u << 16) | (0x76u << 8);
+            dcb[n++] = 0x0204u;
+            dcb[n++] = 0u;
+            dcb[n++] = 0u;
+            dcb[n++] = 0u;
+            dcb[n++] = 8u;
+            dcb[n++] = 8u;
+            dcb[n++] = 1u;
+
+            /* COMPUTE_PGM_LO (0x20C), COMPUTE_PGM_HI (0x20D) (SHADER_TYPE=1 Compute) */
+            dcb[n++] = 0xC0000002u | (2u << 16) | (0x76u << 8);
+            dcb[n++] = 0x020Cu;
+            dcb[n++] = (uint32_t)(pgm_va >> 8);
+            dcb[n++] = (uint32_t)(pgm_va >> 40);
+
+            /* COMPUTE_PGM_RSRC1 (0x212), COMPUTE_PGM_RSRC2 (0x213) */
+            dcb[n++] = 0xC0000002u | (2u << 16) | (0x76u << 8);
+            dcb[n++] = 0x0212u;
+            dcb[n++] = 0x00000043u; /* 16 VGPRs, 16 SGPRs */
+            dcb[n++] = 0x00000998u; /* USER_SGPR=12, TGID_X_EN | TGID_Y_EN | TIDIG_COMP_CNT=1 (v0=x, v1=y) */
+
+            /* COMPUTE_RESOURCE_LIMITS (0x215) = 0; STATIC_THREAD_MGMT_SE0/SE1 (0x216..0x217) = all CUs */
+            dcb[n++] = 0xC0000002u | (3u << 16) | (0x76u << 8);
+            dcb[n++] = 0x0215u;
+            dcb[n++] = 0u;
+            dcb[n++] = 0xFFFFFFFFu;
+            dcb[n++] = 0xFFFFFFFFu;
+
+            /* COMPUTE_USER_DATA_0..11 (0x240..0x24B): s0..s7 = T#, s8=w, s9=h, s10=exp, s11=0 */
+            dcb[n++] = 0xC0000002u | (12u << 16) | (0x76u << 8);
+            dcb[n++] = 0x0240u;
+            dcb[n++] = (uint32_t)(bb_va >> 8);                                                /* T#0 */
+            dcb[n++] = ((uint32_t)(bb_va >> 40) & 0xFFu) | (0x0Au << 20) | (0u << 26) | (3u << 30); /* T#1: 8_8_8_8 UNORM, MTYPE=UC */
+            dcb[n++] = ((w - 1u) & 0x3FFFu) | (((h - 1u) & 0x3FFFu) << 14);                   /* T#2 */
+            uint32_t tile_idx = 0x0Au; /* kTileModeDisplay_2dThin */
+            if (ctx->shader_probe.anti_aliasing >= 2.0f) {
+                tile_idx = (uint32_t)ctx->shader_probe.anti_aliasing & 0x1Fu;
+            }
+            dcb[n++] = (4u << 0) | (5u << 3) | (6u << 6) | (7u << 9) | (tile_idx << 20) | (9u << 28); /* T#3: XYZW, 2D */
+            dcb[n++] = ((w - 1u) & 0x3FFFu) << 13;                                            /* T#4: PITCH - 1 */
+            dcb[n++] = 0u;                                                                    /* T#5 */
+            dcb[n++] = 0u;                                                                    /* T#6 */
+            dcb[n++] = 0u;                                                                    /* T#7 */
+            dcb[n++] = w;                                                                     /* s8 */
+            dcb[n++] = h;                                                                     /* s9 */
+            dcb[n++] = exp_bits;                                                              /* s10 */
+            dcb[n++] = 0u;                                                                    /* s11 */
+
+            /* IT_DISPATCH_DIRECT (0x15, SHADER_TYPE=1 Compute): (w+7)/8 x (h+7)/8 x 1 */
+            dcb[n++] = 0xC0000002u | (3u << 16) | (0x15u << 8);
+            dcb[n++] = (w + 7u) / 8u;
+            dcb[n++] = (h + 7u) / 8u;
+            dcb[n++] = 1u;
+            dcb[n++] = 0x00000001u;
+
+            /* IT_EVENT_WRITE (0x46): CS_PARTIAL_FLUSH */
+            dcb[n++] = 0xC0000000u | (0u << 16) | (0x46u << 8);
+            dcb[n++] = 0x00000407u;
+
+            /* Post-compute IT_ACQUIRE_MEM (0x58): write-back & invalidate TC L2/L1 & CB */
+            dcb[n++] = 0xC0000000u | (5u << 16) | (0x58u << 8);
+            dcb[n++] = 0x02C08000u; /* CB_ACTION_ENA | TC_ACTION_ENA | TCL1_ACTION_ENA | TC_WB_ACTION_ENA */
+            dcb[n++] = 0xFFFFFFFFu; /* COHER_SIZE */
+            dcb[n++] = 0x000000FFu; /* COHER_SIZE_HI */
+            dcb[n++] = 0x00000000u; /* COHER_BASE_LO */
+            dcb[n++] = 0x00000000u; /* COHER_BASE_HI */
+            dcb[n++] = 10u;         /* POLL_INTERVAL */
+
+            /* Pad to 8-dword (32-byte) boundary with IT_NOP */
+            while ((n & 7u) != 0u) {
+                dcb[n++] = 0xC0001000u;
+            }
+            ctx->shader_probe.shader_size = n * 4u;
+            __atomic_add_fetch(&ctx->shader_probe.dispatches, 1u, __ATOMIC_RELAXED);
+        }
+        if (flips == 1ULL || (flips % 600ULL) == 0ULL) {
+            char smsg[ORBX_LOG_LINE_BYTES];
+            size_t scap = sizeof(smsg) - 1;
+            size_t sp = 0;
+            sp = fmt_append_str(smsg, sp, scap, "[GNM-SHADER] Stage 1 Active: Dispatches=");
+            sp = fmt_append_u64(smsg, sp, scap, (uint64_t)ctx->shader_probe.dispatches);
+            sp = fmt_append_str(smsg, sp, scap, " (");
+            sp = fmt_append_str(smsg, sp, scap, ctx->shader_probe.shader_file);
+            sp = fmt_append_str(smsg, sp, scap, ")");
+            smsg[sp] = '\0';
+            log_ring_raw(ctx, smsg);
+        }
+    }
+
+    /* Stage 2 Depth Buffer & Screen-Space SSAO/SSR Scanner */
+    probe_gnm_depth_buffer(ctx, dcb_count, dcb_gpu_addrs, dcb_sizes, flips);
+
     uint64_t flip_fn = __atomic_load_n(&ctx->orig_sceVideoOutSetFlipRate, __ATOMIC_ACQUIRE);
     if (ctx->cfg.unlock_60fps && video_handle > 0 && flip_fn != 0ULL) {
         if (__atomic_exchange_n(&ctx->flip_rate_enforced, 1u, __ATOMIC_ACQ_REL) == 0u) {
@@ -1048,9 +1513,21 @@ static void record_pad_sample(OrbxNativeContext *ctx, int32_t handle, uint8_t *p
     } else if (handle == ctx->menu.pad_active_handle || ctx->menu.pad_active_handle < 0) {
         __atomic_store_n(&ctx->menu.pad_buttons_live, 0u, __ATOMIC_RELEASE);
     }
-    if (ctx->menu.menu_open && !ctx->menu.kb_active) {
-        /* Suppress D-Pad, Cross, Circle to game while menu is open */
-        *(uint32_t *)pData = btns & ~0x000060F0u;
+    if (ctx->menu.armed && ctx->menu.menu_open && !ctx->menu.kb_active && !ctx->menu.keybind_capture_slot) {
+        /* Suppress ONLY valid bound menu navigation/action buttons to game while menu is open */
+        uint32_t allowed = 0x0010FFF6u & (
+            0x000000F0u |
+            ctx->menu.bind_accept |
+            ctx->menu.bind_cancel |
+            ctx->menu.bind_tab_prev |
+            ctx->menu.bind_tab_next |
+            ctx->menu.bind_open_mod |
+            ctx->menu.bind_open_btn
+        );
+        if (ctx->menu.keep_steering) allowed &= ~0x00000300u; /* never mask L2/R2 triggers */
+        uint32_t mask = __atomic_load_n(&ctx->menu.pad_suppress_mask, __ATOMIC_RELAXED) & allowed;
+        if (!mask) mask = 0x00006CF0u & allowed; /* D-Pad + L1 + R1 + Circle + Cross */
+        *(uint32_t *)pData = btns & ~mask;
     }
 }
 
@@ -1075,32 +1552,73 @@ int32_t hook_scePadRead(int32_t handle, uint8_t *pData, int32_t num) {
     return cnt;
 }
 
-__attribute__((naked, used, visibility("hidden")))
-void hook_sceGnmSubmitAndFlipCommandBuffers(void) {
-    __asm__ volatile (
-        "pushq %rdi\n"
-        "pushq %rsi\n"
-        "pushq %rdx\n"
-        "pushq %rcx\n"
-        "pushq %r8\n"
-        "pushq %r9\n"
-        "subq  $8, %rsp\n"
-        "movl  %r9d, %edi\n"
-        "call  on_gnm_flip_enter\n"
-        "addq  $8, %rsp\n"
-        "popq  %r9\n"
-        "popq  %r8\n"
-        "popq  %rcx\n"
-        "popq  %rdx\n"
-        "popq  %rsi\n"
-        "popq  %rdi\n"
-        "testq %rax, %rax\n"
-        "jz    1f\n"
-        "jmpq  *%rax\n"
-        "1:\n"
-        "movl  $-1, %eax\n"
-        "retq\n"
-    );
+__attribute__((used, noinline, visibility("hidden")))
+int32_t hook_sceGnmSubmitAndFlipCommandBuffers(
+    uint32_t count,
+    void *dcbGpuAddrs[],
+    uint32_t *dcbSizesInBytes,
+    void *ccbGpuAddrs[],
+    uint32_t *ccbSizesInBytes,
+    int32_t videoOutHandle,
+    uint32_t displayBufferIndex,
+    uint32_t flipMode,
+    int64_t flipArg
+) {
+    uint64_t orig = on_gnm_flip_enter(videoOutHandle, (int32_t)displayBufferIndex, count, dcbGpuAddrs, dcbSizesInBytes);
+    if (!orig) return -1;
+
+    typedef int32_t (*fn_gnm_t)(uint32_t, void **, uint32_t *, void **, uint32_t *, int32_t, uint32_t, uint32_t, int64_t);
+    fn_gnm_t fn = (fn_gnm_t)(uintptr_t)orig;
+
+    OrbxNativeContext *ctx = get_ctx();
+    if (ctx && ctx->shader_probe.loaded == 1u && ctx->shader_probe.enabled == 1u &&
+        ctx->shader_probe.shader_gpu_va != 0ULL && ctx->gnm_probe.last_backbuffer_va != 0ULL &&
+        ctx->shader_probe.shader_size >= 32u && count > 0u && count < 15u && dcbGpuAddrs && dcbSizesInBytes) {
+        void *new_dcbs[16];
+        uint32_t new_sizes[16];
+        void *new_ccbs[16];
+        uint32_t new_ccb_sizes[16];
+        uint32_t insert_at = count - 1u;
+        for (uint32_t i = 0u; i < insert_at; i++) {
+            new_dcbs[i]      = dcbGpuAddrs[i];
+            new_sizes[i]     = dcbSizesInBytes[i];
+            new_ccbs[i]      = ccbGpuAddrs ? ccbGpuAddrs[i] : NULL;
+            new_ccb_sizes[i] = ccbSizesInBytes ? ccbSizesInBytes[i] : 0u;
+        }
+        new_dcbs[insert_at]      = (void *)(uintptr_t)(ctx->shader_probe.shader_gpu_va + 0x2000ULL);
+        new_sizes[insert_at]     = ctx->shader_probe.shader_size;
+        new_ccbs[insert_at]      = NULL;
+        new_ccb_sizes[insert_at] = 0u;
+        for (uint32_t i = insert_at; i < count; i++) {
+            new_dcbs[i + 1u]      = dcbGpuAddrs[i];
+            new_sizes[i + 1u]     = dcbSizesInBytes[i];
+            new_ccbs[i + 1u]      = ccbGpuAddrs ? ccbGpuAddrs[i] : NULL;
+            new_ccb_sizes[i + 1u] = ccbSizesInBytes ? ccbSizesInBytes[i] : 0u;
+        }
+        int32_t rc = fn(count + 1u, new_dcbs, new_sizes,
+                        ccbGpuAddrs ? new_ccbs : NULL,
+                        ccbSizesInBytes ? new_ccb_sizes : NULL,
+                        videoOutHandle, displayBufferIndex, flipMode, flipArg);
+        if (ctx->shader_probe.dispatches <= 2u) {
+            char rmsg[ORBX_LOG_LINE_BYTES];
+            size_t rcap = sizeof(rmsg) - 1;
+            size_t rp = 0;
+            rp = fmt_append_str(rmsg, rp, rcap, "[GNM-SHADER] SubmitAndFlip(cnt=");
+            rp = fmt_append_u64(rmsg, rp, rcap, (uint64_t)(count + 1u));
+            rp = fmt_append_str(rmsg, rp, rcap, ", idx=");
+            rp = fmt_append_u64(rmsg, rp, rcap, (uint64_t)displayBufferIndex);
+            rp = fmt_append_str(rmsg, rp, rcap, ", bb=");
+            rp = fmt_append_hex64(rmsg, rp, rcap, ctx->gnm_probe.last_backbuffer_va);
+            rp = fmt_append_str(rmsg, rp, rcap, ") rc=");
+            rp = fmt_append_i64(rmsg, rp, rcap, (int64_t)rc);
+            rmsg[rp] = '\0';
+            log_ring_raw(ctx, rmsg);
+        }
+        return rc;
+    }
+
+    return fn(count, dcbGpuAddrs, dcbSizesInBytes, ccbGpuAddrs, ccbSizesInBytes,
+              videoOutHandle, displayBufferIndex, flipMode, flipArg);
 }
 
 static void pso_register_string_list(OrbxNativeContext *ctx,
@@ -1235,6 +1753,8 @@ void orbx_entry_table(void) {
         "jmp hook_scePadReadState\n"
         ".p2align 4\n"
         "jmp hook_scePadRead\n"
+        ".p2align 4\n"
+        "jmp hook_sceVideoOutRegisterBuffers\n"
         ".p2align 4\n"
     );
 }

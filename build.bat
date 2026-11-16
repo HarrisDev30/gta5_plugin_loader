@@ -73,6 +73,8 @@ echo Compiling ELF payload...
 if %ERRORLEVEL% equ 0 (
     echo.
     echo [SUCCESS] Built: %~dp0gta5_plugin_loader.elf
+    copy /y "%~dp0gta5_plugin_loader.elf" "%BASE_DIR%\gta5_plugin_loader.elf" >nul
+    echo [SUCCESS] Synced to: %BASE_DIR%\gta5_plugin_loader.elf
 ) else (
     echo.
     echo [ERROR] Build failed! Check compiler errors above.
